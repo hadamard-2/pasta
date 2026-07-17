@@ -65,6 +65,9 @@ fn io_err<E: std::fmt::Display>(err: E) -> std::io::Error {
 /// `true` only if polkit reports `is_authorized = true` AND `is_challenge =
 /// false`.
 pub(crate) fn authenticate(action_id: &str, _reason: &str) -> bool {
+    // Test-only escape hatch: compiled out of release builds so a shipped
+    // binary can never have its polkit gate short-circuited by an env var.
+    #[cfg(test)]
     if std::env::var_os("PASTA_SKIP_AUTH").is_some() {
         return true;
     }
