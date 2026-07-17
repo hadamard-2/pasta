@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 description = "Fast local-first clipboard launcher with search, syntax previews, and encrypted secrets."
 license = "MIT"
-homepage = "https://github.com/yafetgetachew/pasta"
-repository = "https://github.com/yafetgetachew/pasta"
+homepage = "https://github.com/hadamard-2/pasta"
+repository = "https://github.com/hadamard-2/pasta"
 
 # cargo-deb metadata — drives the release workflow's Ubuntu/Debian .deb build.
 # Runtime deps mirror the Requires list in packaging/linux/pasta.spec; asset
@@ -77,7 +77,6 @@ sha2 = "0.10.9"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 toml = "0.8.23"
 unicode-segmentation = "1.12.0"
-ureq = { version = "3.3.0", features = ["json"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block = "0.1.6"

@@ -27,8 +27,6 @@ pub(crate) struct StatusItemRegistration {
     pub(crate) brain_download_item: StrongPtr,
     pub(crate) font_menu: StrongPtr,
     pub(crate) launch_at_login_item: StrongPtr,
-    pub(crate) analytics_on_item: StrongPtr,
-    pub(crate) analytics_off_item: StrongPtr,
 }
 
 #[cfg(target_os = "macos")]
@@ -297,14 +295,6 @@ fn handle_menu_command(command: MenuCommand, cx: &mut App) {
             cx.global_mut::<UiStyleState>().pasta_brain_enabled = enabled;
             persist_ui_style_state(cx);
             update_brain_menu_state(cx);
-        }
-        MenuCommand::SetAnalyticsOptIn(enabled) => {
-            cx.global_mut::<UiStyleState>().analytics_opt_in = enabled;
-            persist_ui_style_state(cx);
-            update_analytics_menu_state(cx);
-            set_detailed_opt_in(enabled);
-            let storage = cx.global::<StorageState>().storage.clone();
-            send_heartbeat_now(storage, enabled);
         }
         MenuCommand::DownloadBrain => {
             let storage = cx.global::<StorageState>().storage.clone();

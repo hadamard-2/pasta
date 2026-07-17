@@ -92,9 +92,6 @@ jobs:
       - name: Build Pasta.app
         env:
           APP_VERSION: ${{ needs.resolve-version.outputs.version }}
-          PASTA_ANALYTICS_API_KEY: ${{ secrets.PASTA_ANALYTICS_API_KEY }}
-          PASTA_ANALYTICS_ENDPOINT: ${{ secrets.PASTA_ANALYTICS_ENDPOINT }}
-          PASTA_ANALYTICS_SALT: ${{ secrets.PASTA_ANALYTICS_SALT }}
         run: ./scripts/build-macos-bundle.sh
 
       - name: Verify bundle signature
@@ -190,10 +187,6 @@ jobs:
           grep -A1 '^name = "pasta-launcher"$' Cargo.lock | head -2
 
       - name: Build release binary
-        env:
-          PASTA_ANALYTICS_API_KEY: ${{ secrets.PASTA_ANALYTICS_API_KEY }}
-          PASTA_ANALYTICS_ENDPOINT: ${{ secrets.PASTA_ANALYTICS_ENDPOINT }}
-          PASTA_ANALYTICS_SALT: ${{ secrets.PASTA_ANALYTICS_SALT }}
         run: cargo build --release --locked
 
       - name: Package .deb
@@ -315,10 +308,6 @@ jobs:
           grep -A1 '^name = "pasta-launcher"$' Cargo.lock | head -2
 
       - name: Build release binary
-        env:
-          PASTA_ANALYTICS_API_KEY: ${{ secrets.PASTA_ANALYTICS_API_KEY }}
-          PASTA_ANALYTICS_ENDPOINT: ${{ secrets.PASTA_ANALYTICS_ENDPOINT }}
-          PASTA_ANALYTICS_SALT: ${{ secrets.PASTA_ANALYTICS_SALT }}
         # Build in $GITHUB_WORKSPACE so Swatinem/rust-cache's restored
         # target/ is actually the one cargo writes into. Previously rpmbuild
         # compiled inside ~/rpmbuild/BUILD/<...>/target/, which the cache

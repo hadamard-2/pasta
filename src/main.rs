@@ -123,7 +123,6 @@ pub(crate) struct UiStyleState {
     pub syntax_highlighting: bool,
     pub secret_auto_clear: bool,
     pub pasta_brain_enabled: bool,
-    pub analytics_opt_in: bool,
 }
 
 impl Global for UiStyleState {}
@@ -138,8 +137,6 @@ pub(crate) struct PersistedUiStyleState {
     pub(crate) secret_auto_clear: bool,
     #[serde(default = "default_pasta_brain_enabled")]
     pub(crate) pasta_brain_enabled: bool,
-    #[serde(default)]
-    pub(crate) analytics_opt_in: bool,
 }
 
 fn default_pasta_brain_enabled() -> bool {
@@ -201,11 +198,6 @@ pub(crate) const MENU_TAG_CLEAR_HISTORY: isize = 310;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const MENU_TAG_LAUNCH_AT_LOGIN: isize = 311;
 
-#[cfg(any(target_os = "macos", test))]
-pub(crate) const MENU_TAG_ANALYTICS_ON: isize = 312;
-#[cfg(any(target_os = "macos", test))]
-pub(crate) const MENU_TAG_ANALYTICS_OFF: isize = 313;
-
 static MENU_COMMAND_TX: OnceLock<mpsc::Sender<MenuCommand>> = OnceLock::new();
 
 #[derive(Clone, Copy)]
@@ -218,7 +210,6 @@ pub(crate) enum MenuCommand {
     SetSyntaxHighlighting(bool),
     SetSecretAutoClear(bool),
     SetPastaBrain(bool),
-    SetAnalyticsOptIn(bool),
     DownloadBrain,
     RequestClearHistory,
     PerformClearHistory,
@@ -539,14 +530,6 @@ mod tests {
             menu_command_from_tag(MENU_TAG_SECRET_CLEAR_OFF),
             Some(MenuCommand::SetSecretAutoClear(false))
         ));
-        assert!(matches!(
-            menu_command_from_tag(MENU_TAG_ANALYTICS_ON),
-            Some(MenuCommand::SetAnalyticsOptIn(true))
-        ));
-        assert!(matches!(
-            menu_command_from_tag(MENU_TAG_ANALYTICS_OFF),
-            Some(MenuCommand::SetAnalyticsOptIn(false))
-        ));
     }
 }
 
@@ -693,9 +676,6 @@ fn main() {
         spawn_launcher_transition_loop(cx);
         spawn_clipboard_watcher(cx);
 
-        let analytics_opt_in = cx.global::<UiStyleState>().analytics_opt_in;
-        start_heartbeat_scheduler(storage.clone(), analytics_opt_in);
-
         cx.hide();
     });
 }
@@ -786,9 +766,6 @@ fn main() {
         spawn_menu_command_listener(cx, menu_rx);
         spawn_launcher_transition_loop(cx);
         spawn_clipboard_watcher(cx);
-
-        let analytics_opt_in = cx.global::<UiStyleState>().analytics_opt_in;
-        start_heartbeat_scheduler(storage.clone(), analytics_opt_in);
 
         show_launcher(cx);
     });
