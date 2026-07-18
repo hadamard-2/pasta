@@ -469,6 +469,109 @@ pub(crate) fn setup_hotkey(_cx: &mut App) {
 }
 
 // ---------------------------------------------------------------------------
+// Single-instance guard
+// ---------------------------------------------------------------------------
+
+// Holds the flock'd lock file open for the whole process lifetime. Dropping the
+// file releases the advisory lock, so it is parked in a static and never freed.
+static INSTANCE_LOCK: OnceLock<std::fs::File> = OnceLock::new();
+
+fn instance_lock_path() -> PathBuf {
+    let base = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
+    base.join("pasta-launcher.lock")
+}
+
+/// Try to become the single running instance by taking an exclusive advisory
+/// lock (flock) on a per-user lock file. Returns `true` if we acquired it — we
+/// are the instance — and `false` if another instance already holds it. The
+/// lock is released automatically by the kernel if the process exits or crashes,
+/// so a stale lock never wedges future launches. Fails open (returns `true`) if
+/// the lock file itself cannot be opened, so an environment quirk can never
+/// block the app from starting.
+pub(crate) fn acquire_single_instance_lock() -> bool {
+    use nix::fcntl::{FlockArg, flock};
+    use std::os::fd::AsRawFd;
+
+    let path = instance_lock_path();
+    let file = match std::fs::File::create(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("warning: unable to open instance lock '{path:?}': {err}; skipping guard");
+            return true;
+        }
+    };
+    match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
+        Ok(()) => {
+            // Keep the file (and its lock) alive for the process lifetime.
+            let _ = INSTANCE_LOCK.set(file);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// External trigger socket
+// ---------------------------------------------------------------------------
+//
+// Lets a second `pasta --show` invocation signal the already-running instance
+// to open the launcher, so the launcher can be bound to a desktop-environment
+// keyboard shortcut (e.g. a GNOME custom shortcut) without granting the app
+// raw /dev/input access for the evdev hotkey listener.
+
+fn trigger_socket_path() -> PathBuf {
+    // XDG_RUNTIME_DIR is the correct home for per-user runtime sockets; fall
+    // back to the temp dir when it is unset (e.g. minimal login environments).
+    let base = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
+    base.join("pasta-launcher.sock")
+}
+
+/// Connect to a running Pasta instance and ask it to show the launcher.
+/// Returns `true` only when a listening instance accepted the request.
+pub(crate) fn send_show_trigger() -> bool {
+    match std::os::unix::net::UnixStream::connect(trigger_socket_path()) {
+        Ok(mut stream) => stream.write_all(b"show\n").is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// Bind the trigger socket and forward any incoming request to the menu command
+/// channel as `ShowLauncher`. Runs for the life of the process.
+pub(crate) fn spawn_trigger_listener() {
+    let Some(menu_tx) = MENU_COMMAND_TX.get().cloned() else {
+        eprintln!("warning: trigger socket unavailable: menu command channel not initialized");
+        return;
+    };
+
+    let path = trigger_socket_path();
+    // A socket file left behind by a previous run makes bind() fail with
+    // EADDRINUSE even though nobody is listening; clear it first.
+    let _ = std::fs::remove_file(&path);
+    let listener = match std::os::unix::net::UnixListener::bind(&path) {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!("warning: failed to bind trigger socket '{path:?}': {err}");
+            return;
+        }
+    };
+
+    std::thread::Builder::new()
+        .name("pasta-trigger".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                // Only one command exists today, so any readable payload is a
+                // request to show the launcher.
+                let mut buf = [0u8; 16];
+                if stream.read(&mut buf).is_ok() {
+                    let _ = menu_tx.send(MenuCommand::ShowLauncher);
+                }
+            }
+        })
+        .ok();
+}
+
+// ---------------------------------------------------------------------------
 // Autostart (Phase 3) — XDG counterpart to macOS launch_agent
 // ---------------------------------------------------------------------------
 
@@ -982,7 +1085,7 @@ fn default_ui_style_state(default_family: gpui::SharedString) -> UiStyleState {
         theme_mode: ThemeMode::System,
         syntax_highlighting: true,
         secret_auto_clear: true,
-        pasta_brain_enabled: true,
+        pasta_brain_enabled: false,
     }
 }
 
@@ -1237,6 +1340,12 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
             let search_tx = search_tx.clone();
             let generation_token = generation_token.clone();
 
+            // GPUI's X11 backend requests a centered position but never marks it
+            // user-specified, so Mutter ignores it and runs its own placement
+            // (often top-left). Position the still-unmapped window on the primary
+            // monitor and set USPosition so the window manager honors it.
+            center_launcher_window_on_primary(window);
+
             window.on_window_should_close(cx, |_, cx| {
                 cx.hide();
                 false
@@ -1421,6 +1530,147 @@ fn add_rounded_blur_region(region: &WlRegion, width: i32, height: i32, radius: i
             region.add(inset, height - y - 1, span, 1);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Window centering (X11)
+// ---------------------------------------------------------------------------
+//
+// GPUI's X11 backend models every monitor as one combined screen and requests a
+// centered position, but it never sets the ICCCM `USPosition` flag. GNOME's
+// Mutter therefore treats the position as advisory and runs its own placement,
+// which lands the window near the top-left (and, on multi-monitor, the "center"
+// is the midpoint of the whole desktop rather than one screen). We correct both
+// by positioning the still-unmapped window on the primary RandR monitor and
+// marking the position user-specified so the window manager honors it.
+
+/// Primary monitor rectangle (x, y, width, height) in device pixels via RandR.
+/// Returns `None` if RandR has no primary output or the query fails.
+fn primary_monitor_rect(conn: &impl x11rb::connection::Connection, root: u32) -> Option<(i32, i32, i32, i32)> {
+    use x11rb::protocol::randr::ConnectionExt as _;
+
+    let primary = conn.randr_get_output_primary(root).ok()?.reply().ok()?.output;
+    let resources = conn
+        .randr_get_screen_resources_current(root)
+        .ok()?
+        .reply()
+        .ok()?;
+    let output = conn
+        .randr_get_output_info(primary, resources.config_timestamp)
+        .ok()?
+        .reply()
+        .ok()?;
+    if output.crtc == 0 {
+        return None;
+    }
+    let crtc = conn
+        .randr_get_crtc_info(output.crtc, resources.config_timestamp)
+        .ok()?
+        .reply()
+        .ok()?;
+    Some((
+        crtc.x as i32,
+        crtc.y as i32,
+        crtc.width as i32,
+        crtc.height as i32,
+    ))
+}
+
+/// Center the launcher window on the primary monitor and pin the position so the
+/// window manager does not re-place it. No-op on Wayland (the compositor owns
+/// window placement there) and best-effort on X11 — any failure leaves GPUI's
+/// default behavior untouched.
+///
+/// GPUI 0.2.2's X11 backend leaves `HasWindowHandle` unimplemented, so we cannot
+/// ask it for the window id. Instead we locate the freshly-created, still
+/// unmapped launcher on the X server by matching GPUI's `_NET_WM_PID` stamp
+/// (our process) and the launcher's device size (which distinguishes it from the
+/// 1x1 background-anchor window that shares our PID).
+fn center_launcher_window_on_primary(window: &Window) {
+    use x11rb::connection::Connection;
+    use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
+    use x11rb::protocol::xproto::{AtomEnum, ConfigureWindowAux, ConnectionExt as _};
+
+    if is_wayland_session() {
+        return;
+    }
+
+    let scale = window.scale_factor();
+    let want_w = (crate::LAUNCHER_WIDTH * scale).round() as i32;
+    let want_h = (crate::LAUNCHER_HEIGHT * scale).round() as i32;
+
+    let (conn, screen_num) = match x11rb::connect(None) {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("warning: X11 connect for window centering failed: {err}");
+            return;
+        }
+    };
+    let screen = &conn.setup().roots[screen_num];
+    let root = screen.root;
+
+    let pid_atom = match conn
+        .intern_atom(false, b"_NET_WM_PID")
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    {
+        Some(reply) if reply.atom != 0 => reply.atom,
+        _ => return,
+    };
+    let our_pid = std::process::id();
+
+    let children = match conn
+        .query_tree(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    {
+        Some(reply) => reply.children,
+        None => return,
+    };
+
+    let launcher = children.into_iter().find(|&child| {
+        let Some(geometry) = conn
+            .get_geometry(child)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            return false;
+        };
+        // Tolerate off-by-one from fractional-scale rounding.
+        if (geometry.width as i32 - want_w).abs() > 2
+            || (geometry.height as i32 - want_h).abs() > 2
+        {
+            return false;
+        }
+        let pid = conn
+            .get_property(false, child, pid_atom, AtomEnum::CARDINAL, 0, 1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|reply| reply.value32().and_then(|mut values| values.next()));
+        pid == Some(our_pid)
+    });
+
+    let Some(win) = launcher else {
+        return;
+    };
+
+    let (mx, my, mw, mh) = primary_monitor_rect(&conn, root).unwrap_or((
+        0,
+        0,
+        screen.width_in_pixels as i32,
+        screen.height_in_pixels as i32,
+    ));
+
+    let x = mx + (mw - want_w) / 2;
+    let y = my + (mh - want_h) / 2;
+
+    let _ = conn.configure_window(win, &ConfigureWindowAux::new().x(x).y(y));
+    let hints = WmSizeHints {
+        position: Some((WmSizeHintsSpecification::UserSpecified, x, y)),
+        ..WmSizeHints::default()
+    };
+    let _ = hints.set_normal_hints(&conn, win);
+    let _ = conn.flush();
 }
 
 fn current_clipboard_signature() -> Option<String> {

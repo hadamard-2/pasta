@@ -294,6 +294,12 @@ fn handle_menu_command(command: MenuCommand, cx: &mut App) {
         MenuCommand::SetPastaBrain(enabled) => {
             cx.global_mut::<UiStyleState>().pasta_brain_enabled = enabled;
             persist_ui_style_state(cx);
+            // Warm up the model the first time the user turns Pasta Brain on, so
+            // enabling it from the tray doesn't require a separate "Download" step.
+            if enabled {
+                let storage = cx.global::<StorageState>().storage.clone();
+                spawn_neural_init(storage);
+            }
             update_brain_menu_state(cx);
         }
         MenuCommand::DownloadBrain => {

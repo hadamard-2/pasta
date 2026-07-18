@@ -4412,6 +4412,7 @@ dependencies = [
  "wayland-protocols-plasma",
  "wayland-protocols-wlr",
  "wl-clipboard-rs",
+ "x11rb",
  "zbus 5.14.0",
 ]
 

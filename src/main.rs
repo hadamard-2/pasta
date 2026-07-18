@@ -140,7 +140,7 @@ pub(crate) struct PersistedUiStyleState {
 }
 
 fn default_pasta_brain_enabled() -> bool {
-    true
+    false
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -642,9 +642,12 @@ fn main() {
             storage: storage.clone(),
         });
 
-        spawn_neural_init(storage.clone());
-
         load_embedded_ui_font(cx);
+        // Only warm up Pasta Brain (model download + ONNX session) when the user
+        // has it enabled. Toggling it on later triggers init from the tray handler.
+        if cx.global::<UiStyleState>().pasta_brain_enabled {
+            spawn_neural_init(storage.clone());
+        }
         cx.bind_keys([
             KeyBinding::new("backspace", QueryBackspace, Some("PastaTextInput")),
             KeyBinding::new("left", QueryLeft, Some("PastaTextInput")),
@@ -682,6 +685,21 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn main() {
+    // Single-instance guard + external trigger. Any launch first tries to take
+    // the instance lock. If another instance already holds it, hand off by
+    // asking it to open its launcher over the trigger socket — this covers both
+    // a plain re-launch and `pasta --show` bound to a desktop keyboard shortcut
+    // — then exit instead of starting a second copy. Only the lock holder goes
+    // on to run the app and bind the trigger socket.
+    if !acquire_single_instance_lock() {
+        if !send_show_trigger() {
+            eprintln!(
+                "warning: another Pasta instance is running but did not respond on the trigger socket"
+            );
+        }
+        return;
+    }
+
     Application::new().run(|cx: &mut App| {
         let (menu_tx, menu_rx) = mpsc::channel::<MenuCommand>();
         let _ = MENU_COMMAND_TX.set(menu_tx);
@@ -726,9 +744,12 @@ fn main() {
             storage: storage.clone(),
         });
 
-        spawn_neural_init(storage.clone());
-
         load_embedded_ui_font(cx);
+        // Only warm up Pasta Brain (model download + ONNX session) when the user
+        // has it enabled. Toggling it on later triggers init from the tray handler.
+        if cx.global::<UiStyleState>().pasta_brain_enabled {
+            spawn_neural_init(storage.clone());
+        }
         cx.bind_keys([
             KeyBinding::new("backspace", QueryBackspace, Some("PastaTextInput")),
             KeyBinding::new("left", QueryLeft, Some("PastaTextInput")),
@@ -763,6 +784,7 @@ fn main() {
         // These runtime spawners need real implementations in later phases.
         // For now they just set up the event loops with stubbed platform calls.
         spawn_hotkey_listener(cx);
+        spawn_trigger_listener();
         spawn_menu_command_listener(cx, menu_rx);
         spawn_launcher_transition_loop(cx);
         spawn_clipboard_watcher(cx);

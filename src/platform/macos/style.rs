@@ -22,7 +22,7 @@ fn default_ui_style_state(default_family: SharedString) -> UiStyleState {
         theme_mode: ThemeMode::System,
         syntax_highlighting: true,
         secret_auto_clear: true,
-        pasta_brain_enabled: true,
+        pasta_brain_enabled: false,
     }
 }
 
