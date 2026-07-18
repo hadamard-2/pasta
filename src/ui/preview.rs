@@ -3,12 +3,7 @@ use chrono::{DateTime, Local};
 
 pub(crate) fn masked_secret_preview(content: &str) -> String {
     let width = content.chars().count().clamp(8, 32);
-    let hint = if cfg!(target_os = "macos") {
-        "⌘R reveal"
-    } else {
-        "Ctrl+R reveal"
-    };
-    format!("{}  (secret, {hint})", "•".repeat(width))
+    "•".repeat(width)
 }
 
 pub(crate) fn preview_content(content: &str) -> String {

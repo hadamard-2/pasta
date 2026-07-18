@@ -722,7 +722,7 @@ impl Tray for PastaTray {
 
         items.push(
             StandardItem {
-                label: "About Pasta".into(),
+                label: "About".into(),
                 activate: Box::new(|tray: &mut Self| {
                     let _ = tray.menu_tx.send(MenuCommand::ShowAbout);
                 }),
@@ -835,7 +835,7 @@ impl Tray for PastaTray {
         items.push(MenuItem::Separator);
         items.push(
             StandardItem {
-                label: "Quit Pasta".into(),
+                label: "Quit".into(),
                 activate: Box::new(|tray: &mut Self| {
                     let _ = tray.menu_tx.send(MenuCommand::QuitApp);
                 }),
@@ -1268,7 +1268,7 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
 
 const ABOUT_GITHUB_URL: &str = "https://github.com/yafetgetachew/pasta";
 
-/// Static "About Pasta" panel. Replaces the old kdialog/zenity/rfd dialog
+/// Static "About" panel. Replaces the old kdialog/zenity/rfd dialog
 /// chain, which — being windows the WM placed itself rather than ones we
 /// created and centered — inherited the same off-center Mutter placement bug
 /// the launcher had before `center_window_on_primary`.
@@ -1371,7 +1371,7 @@ fn create_about_window(cx: &mut App) -> Option<WindowHandle<AboutView>> {
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some("About Pasta".into()),
+                title: Some("About".into()),
                 ..Default::default()
             }),
             focus: true,

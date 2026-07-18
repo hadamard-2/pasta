@@ -98,10 +98,11 @@ impl Render for LauncherView {
                     .items_center()
                     .gap_2()
                     .px_2()
-                    .py(px(2.0))
+                    .pt(px(4.0))
+                    .pb(px(2.0))
                     .rounded_md()
                     .line_height(px(30.0))
-                    .text_lg()
+                    .text_base()
                     .font_weight(FontWeight::NORMAL);
 
                 if query_input_enabled {
@@ -1307,6 +1308,8 @@ impl Render for LauncherView {
                     .w(relative(RESULTS_LIST_WIDTH_RATIO))
                     .h_full()
                     .min_w(px(0.0))
+                    .pt(px(4.0))
+                    .pb(px(12.0))
                     .overflow_hidden()
                     .child(results),
             )
@@ -1315,7 +1318,8 @@ impl Render for LauncherView {
                     .flex_1()
                     .h_full()
                     .min_w(px(0.0))
-                    .py(px(4.0))
+                    .pt(px(4.0))
+                    .pb(px(12.0))
                     .child(self.render_preview_pane(palette)),
             );
 
@@ -1524,7 +1528,8 @@ impl LauncherView {
             .w_full()
             .h_full()
             .min_w(px(0.0))
-            .p_2()
+            .py_2()
+            .px(px(12.0))
             .bg(scale_alpha(
                 palette.row_hover_bg,
                 if palette.dark { 0.92 } else { 1.0 },
@@ -1747,8 +1752,9 @@ impl LauncherView {
             && !parameter_fill_open
             && !transform_menu_open;
 
-        // Selection is fill only — a flat rounded pill, no border, inset from the
-        // pane edge by the wrapper's horizontal padding.
+        // Selection is fill only — a flat rounded pill, no border, flush with
+        // the list edges with content inset by its own horizontal padding
+        // (matching the preview pane's border-flush + p_2 pattern).
         let mut fill = div()
             .id(("result", item.id as u64))
             .w_full()
@@ -1781,7 +1787,7 @@ impl LauncherView {
                 .w(px(15.0))
                 .flex()
                 .justify_center()
-                .text_size(px(13.0))
+                .text_size(px(14.0))
                 .text_color(type_color(item.item_type, palette.dark))
                 .child(type_icon_glyph(item.item_type)),
         );
@@ -1792,7 +1798,7 @@ impl LauncherView {
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
-                .text_size(px(13.0))
+                .text_size(px(14.0))
                 .text_color(palette.row_text)
                 .child(row_data.title.clone()),
         );
@@ -1825,7 +1831,6 @@ impl LauncherView {
         div()
             .w_full()
             .h(px(RESULT_ROW_HEIGHT))
-            .px(px(8.0))
             .py(px(2.0))
             .child(fill)
             .into_any_element()

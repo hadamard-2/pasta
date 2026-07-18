@@ -134,7 +134,7 @@ fn handle_menu_command(command: MenuCommand, cx: &mut App) {
                     The clipboard manager for devs and devops.\\n\
                     Blazing-fast, Spotlight-style clipboard launcher\\n\
                     built with Rust and GPUI.\" \
-                    with title \"About Pasta\" \
+                    with title \"About\" \
                     buttons {{\"GitHub\", \"OK\"}} default button 2 {icon_clause}\n\
                     if button returned of result is \"GitHub\" then\n\
                       open location \"https://github.com/yafetgetachew/pasta\"\n\

@@ -131,7 +131,7 @@ pub(crate) fn setup_status_item(cx: &mut App) {
         menu.addItem_(NSMenuItem::separatorItem(nil));
 
         let about_item = menu_item(
-            "About Pasta",
+            "About",
             "",
             handler,
             selector("menuAction:"),
