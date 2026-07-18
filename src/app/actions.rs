@@ -2428,10 +2428,6 @@ impl LauncherView {
                 cx.notify();
                 return;
             }
-            "backspace" if action_mod && !modifiers.alt && !modifiers.function => {
-                self.delete_selected_item(cx);
-                return;
-            }
             _ => {}
         }
     }
