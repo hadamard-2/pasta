@@ -115,6 +115,8 @@ MIT — free to use, modify, and distribute. Keep the attribution: Yafet Getache
 
 See [LICENSE](LICENSE) for the full text.
 
+The app icon is derived from Google's [Noto Emoji](https://github.com/googlefonts/noto-emoji) clipboard glyph (U+1F4CB), licensed under Apache License 2.0 / SIL Open Font License 1.1.
+
 <br>
 
 <div align="center">
