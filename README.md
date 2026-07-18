@@ -93,6 +93,8 @@ The install script builds the release binary, drops a `.desktop` entry and icon 
 
 Global hotkey is `Meta + Space`. Tray icon requires a StatusNotifierItem host (built-in on KDE, `gnome-shell-extension-appindicator` on GNOME).
 
+**Hotkey needs input access — or bind it yourself.** Pasta detects `Meta + Space` by reading `/dev/input` directly, which requires your user to be in the `input` group: `sudo usermod -aG input $USER`, then log out and back in. If you'd rather not grant that (membership lets any process you run read all keyboard and mouse input), skip it and bind the launcher to a desktop shortcut instead: `pasta-launcher --show` opens the launcher of the running instance, so map that command to a key in GNOME Settings → Keyboard → Custom Shortcuts (or your desktop's equivalent). Pasta is single-instance — launching it again, or running `pasta-launcher --show` when it is already open, surfaces the existing window instead of starting a second copy; if no instance is running yet, `--show` starts one.
+
 **Secrets on Linux.** Revealing a masked entry or clearing clipboard history triggers a polkit prompt backed by PAM. Password works out of the box. If you have [Howdy](https://github.com/boltgolt/howdy) installed and enrolled (`sudo howdy add`) and your distro's `system-auth` stack includes `pam_howdy.so`, face recognition is tried before the password field appears. Verify the action is registered with `pkaction --action-id com.pasta.launcher.reveal-secret`.
 
 On first enable of **Pasta Brain** (neural search), the app downloads a ~90 MB embedding model into the system cache directory (`~/Library/Caches/pasta-launcher/fastembed/` on macOS, `~/.cache/pasta-launcher/fastembed/` on Linux). Offline or firewall? Pasta falls back to keyword search and you can retry from the menu bar.
@@ -102,6 +104,8 @@ On first enable of **Pasta Brain** (neural search), the app downloads a ~90 MB e
 ## Contributing
 
 PRs welcome. Good first targets: Windows port, image clipboard support, more transforms (hex, regex extract, markdown strip), automated tests, i18n. Open an issue first if it's a big change.
+
+If you're working on Linux windowing, the global hotkey, blur, single-instance behavior, or debugging any of it, read [docs/linux-platform-notes.md](docs/linux-platform-notes.md) first — it captures the non-obvious X11/GPUI/Mutter interactions so you don't rediscover them the hard way.
 
 <br>
 
