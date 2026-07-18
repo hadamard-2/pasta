@@ -279,11 +279,13 @@ fn transform_action_for_shortcut(
 }
 
 mod app;
+mod assets;
 mod platform;
 mod transforms;
 mod ui;
 
 use app::*;
+use assets::Assets;
 use platform::*;
 use transforms::*;
 use ui::*;
@@ -478,7 +480,7 @@ pub(crate) fn spawn_neural_init(storage: Arc<ClipboardStorage>) {
 
 #[cfg(target_os = "macos")]
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(Assets).run(|cx: &mut App| {
         ensure_launch_agent_registered();
 
         let (menu_tx, menu_rx) = mpsc::channel::<MenuCommand>();
@@ -581,7 +583,7 @@ fn main() {
         return;
     }
 
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(Assets).run(|cx: &mut App| {
         let (menu_tx, menu_rx) = mpsc::channel::<MenuCommand>();
         let _ = MENU_COMMAND_TX.set(menu_tx);
 

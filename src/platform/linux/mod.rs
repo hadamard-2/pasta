@@ -1748,42 +1748,17 @@ fn neural_download_label(status: NeuralStatus) -> &'static str {
 }
 
 fn pasta_tray_icon() -> Icon {
-    const WIDTH: i32 = 16;
-    const HEIGHT: i32 = 16;
-    const GLYPH: [&str; 16] = [
-        "................",
-        ".##########.....",
-        ".##......##.....",
-        ".##......##.....",
-        ".##......##.....",
-        ".#########......",
-        ".##.............",
-        ".##.............",
-        ".##.............",
-        ".##.............",
-        ".##.............",
-        ".##.............",
-        ".##.............",
-        "................",
-        "................",
-        "................",
-    ];
-
-    let mut data = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
-    for row in GLYPH {
-        for pixel in row.as_bytes() {
-            if *pixel == b'#' {
-                data.extend_from_slice(&[0xFF, 0xF5, 0xF5, 0xF5]);
-            } else {
-                data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-            }
-        }
-    }
+    // Lucide "clipboard-pen" glyph, pre-rendered to a 32x32 ARGB32 (network
+    // byte order) bitmap so the tray icon matches the app/desktop icon
+    // without pulling in an SVG rasterizer at runtime.
+    const WIDTH: i32 = 32;
+    const HEIGHT: i32 = 32;
+    const BYTES: &[u8] = include_bytes!("../../../assets/tray/pasta-tray-32.argb");
 
     Icon {
         width: WIDTH,
         height: HEIGHT,
-        data,
+        data: BYTES.to_vec(),
     }
 }
 

@@ -5,7 +5,7 @@ use super::actions::{
 use super::query_input::TextInputElement;
 use super::state::CachedRowPresentation;
 use crate::*;
-use gpui::{AnyElement, StatefulInteractiveElement, canvas, hsla, size};
+use gpui::{AnyElement, StatefulInteractiveElement, canvas, hsla, size, svg};
 
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -94,6 +94,9 @@ impl Render for LauncherView {
             .child({
                 let mut query_container = div()
                     .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
                     .px_2()
                     .py(px(2.0))
                     .rounded_md()
@@ -165,15 +168,23 @@ impl Render for LauncherView {
                 // background fill, focused or not (section 4 of the design system).
                 let _ = query_focused;
 
-                div()
-                    .w_full()
-                    .child(query_container.child(TextInputElement::new(
-                        cx.entity(),
-                        TextInputTarget::Query,
-                        "Search snippets, commands, and passwords…",
-                        palette,
-                        query_input_enabled,
-                    )))
+                div().w_full().child(
+                    query_container
+                        .child(
+                            svg()
+                                .path("icons/search.svg")
+                                .size(px(14.0))
+                                .flex_shrink_0()
+                                .text_color(palette.muted_text),
+                        )
+                        .child(div().flex_1().min_w(px(0.0)).child(TextInputElement::new(
+                            cx.entity(),
+                            TextInputTarget::Query,
+                            "Search snippets, commands, and passwords…",
+                            palette,
+                            query_input_enabled,
+                        ))),
+                )
             });
         if !self.tag_search_suggestions.is_empty() && query_input_enabled {
             content = content.child(self.render_tag_search_suggestions(palette, cx));
