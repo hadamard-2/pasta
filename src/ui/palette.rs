@@ -16,6 +16,9 @@ pub(crate) struct Palette {
     pub(crate) row_hover_bg: gpui::Rgba,
     pub(crate) selected_bg: gpui::Rgba,
     pub(crate) selected_border: gpui::Rgba,
+    pub(crate) action_bar_bg: gpui::Rgba,
+    pub(crate) keycap_bg: gpui::Rgba,
+    pub(crate) keycap_text: gpui::Rgba,
 }
 
 pub(crate) fn palette_for(appearance: WindowAppearance, surface_alpha: f32) -> Palette {
@@ -24,38 +27,46 @@ pub(crate) fn palette_for(appearance: WindowAppearance, surface_alpha: f32) -> P
         WindowAppearance::Dark | WindowAppearance::VibrantDark
     );
 
+    // A neutral, near-zero-chroma grayscale ladder. The window surface is opaque
+    // by default (blur is unavailable on GNOME); the border plus shadow separate
+    // it from the desktop. surface_alpha still scales the surfaces below 1.0.
     let mut palette = if dark {
         Palette {
             dark,
-            window_bg: rgba(0x08131f99),
-            window_border: rgba(0x7dd3fc33),
-            title_text: rgba(0xe0f2fed9),
-            query_placeholder: rgba(0x7dd3fcd9),
-            query_active: rgba(0xf8fafcfa),
-            muted_text: rgba(0x93c5fdd0),
-            list_divider: rgba(0x7dd3fc26),
-            row_text: rgba(0xe2e8f0f5),
-            row_meta_text: rgba(0x93c5fdcc),
-            row_hover_bg: rgba(0x38bdf81f),
-            selected_bg: rgba(0x22d3ee33),
-            selected_border: rgba(0x67e8f944),
+            window_bg: rgba(0x17171Aff),
+            window_border: rgba(0x2C2C30ff),
+            title_text: rgba(0xEDEDEFff),
+            query_placeholder: rgba(0x6E6E73ff),
+            query_active: rgba(0xF5F5F7ff),
+            muted_text: rgba(0x8A8A8Fff),
+            list_divider: rgba(0x262629ff),
+            row_text: rgba(0xEDEDEFff),
+            row_meta_text: rgba(0x8A8A8Fff),
+            row_hover_bg: rgba(0xFFFFFF0A),
+            selected_bg: rgba(0x2A2A2Eff),
+            selected_border: rgba(0x00000000),
+            action_bar_bg: rgba(0x1C1C1Fff),
+            keycap_bg: rgba(0x2A2A2Eff),
+            keycap_text: rgba(0x8A8A8Fff),
         }
     } else {
         Palette {
             dark,
-            window_bg: rgba(0xffffff8c),
-            window_border: rgba(0x0f172a30),
-            title_text: rgba(0x0f172ad9),
-            query_placeholder: rgba(0x64748bb8),
-            query_active: rgba(0x020617f2),
-            muted_text: rgba(0x334155c4),
-            list_divider: rgba(0x33415520),
-            row_text: rgba(0x020617eb),
-            row_meta_text: rgba(0x475569ab),
-            // Neutral hover/selection — no blue tint.
-            row_hover_bg: rgba(0x0f172a0c),
-            selected_bg: rgba(0x0f172a14),
-            selected_border: rgba(0x0f172a30),
+            window_bg: rgba(0xFFFFFFff),
+            window_border: rgba(0x00000014),
+            title_text: rgba(0x1D1D1Fff),
+            query_placeholder: rgba(0x8E8E93ff),
+            query_active: rgba(0x000000ff),
+            muted_text: rgba(0x8E8E93ff),
+            list_divider: rgba(0x0000000D),
+            row_text: rgba(0x1D1D1Fff),
+            row_meta_text: rgba(0x8E8E93ff),
+            row_hover_bg: rgba(0x00000008),
+            selected_bg: rgba(0x00000010),
+            selected_border: rgba(0x00000000),
+            action_bar_bg: rgba(0xF5F5F5ff),
+            keycap_bg: rgba(0x0000000D),
+            keycap_text: rgba(0x8E8E93ff),
         }
     };
 
@@ -81,149 +92,49 @@ pub(crate) fn scale_alpha(color: gpui::Rgba, scale: f32) -> gpui::Rgba {
 }
 
 pub(crate) fn type_color(item_type: ClipboardItemType, dark: bool) -> gpui::Hsla {
+    // Heavily desaturated type hues. Color lands only on the leading row icon
+    // (and detail-pane chips), never on a saturated chip background.
     match item_type {
         ClipboardItemType::Text => {
             if dark {
-                rgb(0x38bdf8).into()
+                rgb(0x6E9ECF).into()
             } else {
-                rgb(0x0369a1).into()
+                rgb(0x4E7BA6).into()
             }
         }
         ClipboardItemType::Code => {
             if dark {
-                rgb(0x34d399).into()
+                rgb(0x5FB99A).into()
             } else {
-                rgb(0x047857).into()
+                rgb(0x3F8C6E).into()
             }
         }
         ClipboardItemType::Command => {
             if dark {
-                rgb(0xfbbf24).into()
+                rgb(0xCFA85F).into()
             } else {
-                rgb(0xb45309).into()
+                rgb(0x9A7636).into()
             }
         }
         ClipboardItemType::Password => {
             if dark {
-                rgb(0xf472b6).into()
+                rgb(0xCF7FA3).into()
             } else {
-                rgb(0x9d174d).into()
+                rgb(0xA85F81).into()
             }
         }
     }
 }
 
-fn push_unique_chip(chips: &mut Vec<String>, label: &str) {
-    if !chips.iter().any(|existing| existing == label) {
-        chips.push(label.to_owned());
+/// A single-glyph leading indicator per clipboard type, colored via
+/// [`type_color`]. Kept to plain ASCII so it renders in any bundled font.
+pub(crate) fn type_icon_glyph(item_type: ClipboardItemType) -> &'static str {
+    match item_type {
+        ClipboardItemType::Text => "T",
+        ClipboardItemType::Code => "#",
+        ClipboardItemType::Command => "$",
+        ClipboardItemType::Password => "*",
     }
-}
-
-pub(crate) fn visible_tag_chips(
-    item_type: ClipboardItemType,
-    language: Option<LanguageTag>,
-    tags: &[String],
-) -> Vec<String> {
-    let mut chips = Vec::new();
-
-    let has = |needle: &str| tags.iter().any(|tag| tag.eq_ignore_ascii_case(needle));
-
-    if item_type == ClipboardItemType::Text {
-        push_unique_chip(&mut chips, "TEXT");
-    } else {
-        push_unique_chip(&mut chips, item_type.label());
-    }
-    if let Some(language) = language {
-        push_unique_chip(&mut chips, language.label());
-    }
-
-    if chips.len() < MAX_VISIBLE_TAG_CHIPS {
-        for raw in tags {
-            let lower = raw.to_ascii_lowercase();
-            if lower.is_empty()
-                || matches!(
-                    lower.as_str(),
-                    "text"
-                        | "code"
-                        | "command"
-                        | "password"
-                        | "shell"
-                        | "singleline"
-                        | "multiline"
-                        | "long"
-                        | "url"
-                        | "path"
-                        | "env"
-                        | "ip"
-                        | "sensitive"
-                        | "secret"
-                        | "pass"
-                        | "high_entropy"
-                        | "token"
-                        | "base64"
-                        | "k8s"
-                        | "kubernetes"
-                        | "docker"
-                        | "dockerfile"
-                        | "terraform"
-                        | "hcl"
-                        | "jwt"
-                        | "ansible"
-                )
-                || lower.starts_with("type:")
-                || lower.starts_with("lang:")
-            {
-                continue;
-            }
-
-            let normalized = raw.to_ascii_uppercase();
-            push_unique_chip(&mut chips, &normalized);
-            if chips.len() >= MAX_VISIBLE_TAG_CHIPS {
-                break;
-            }
-        }
-    }
-
-    // Domain/structural chips — shown after language/type chips.
-    if has("k8s") {
-        push_unique_chip(&mut chips, "K8S");
-    }
-    if has("docker") {
-        push_unique_chip(&mut chips, "DOCKER");
-    }
-    if has("terraform") {
-        push_unique_chip(&mut chips, "TF");
-    }
-    if has("ansible") {
-        push_unique_chip(&mut chips, "ANSIBLE");
-    }
-    if has("jwt") {
-        push_unique_chip(&mut chips, "JWT");
-    }
-    if has("sensitive") {
-        push_unique_chip(&mut chips, "SECRET");
-    }
-    if has("env") {
-        push_unique_chip(&mut chips, "ENV");
-    }
-    if has("ip") {
-        push_unique_chip(&mut chips, "IP");
-    }
-    if has("path") {
-        push_unique_chip(&mut chips, "PATH");
-    }
-    if has("url") {
-        push_unique_chip(&mut chips, "URL");
-    }
-    if has("long") {
-        push_unique_chip(&mut chips, "LONG");
-    }
-    if has("multiline") {
-        push_unique_chip(&mut chips, "MULTI");
-    }
-
-    chips.truncate(MAX_VISIBLE_TAG_CHIPS);
-    chips
 }
 
 pub(crate) fn tag_chip_color(label: &str, dark: bool) -> gpui::Hsla {

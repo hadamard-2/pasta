@@ -13,6 +13,7 @@ pub(super) struct TextInputElement {
 pub(super) struct TextInputPrepaintState {
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
+    caret_visible: bool,
     selection: Option<PaintQuad>,
 }
 
@@ -77,6 +78,7 @@ impl GpuiElement for TextInputElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
+        let caret_visible = input.caret_visible;
         let content = input.text_input_content(self.target).to_owned();
         let input_state = input.text_input_state(self.target);
         let selected_range = clamp_text_range(&content, &input_state.selected_range);
@@ -142,14 +144,24 @@ impl GpuiElement for TextInputElement {
 
         let cursor_pos = line.x_for_index(cursor);
         let (selection, cursor) = if selected_range.is_empty() || content.is_empty() {
+            // Size the caret to the glyphs, not to the container's line-height
+            // box: the search field sets a generous line_height (e.g. 30px) far
+            // taller than its 18px text, and a full-height caret reads as an
+            // oversized bar next to the actual letters. Center a glyph-height
+            // bar on the line instead.
+            let caret_height = (font_size * 1.15).min(bounds.bottom() - bounds.top());
+            let caret_top = bounds.top() + ((bounds.bottom() - bounds.top()) - caret_height) / 2.0;
             (
                 None,
                 Some(fill(
                     Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.0), bounds.bottom() - bounds.top()),
+                        point(bounds.left() + cursor_pos, caret_top),
+                        size(px(2.0), caret_height),
                     ),
-                    self.palette.selected_border,
+                    // `selected_border` is intentionally transparent for row
+                    // selection (fill-only per the design system), so the caret
+                    // needs its own visible color rather than reusing that token.
+                    self.palette.query_active,
                 )),
             )
         } else {
@@ -174,6 +186,7 @@ impl GpuiElement for TextInputElement {
         TextInputPrepaintState {
             line: Some(line),
             cursor,
+            caret_visible,
             selection,
         }
     }
@@ -211,6 +224,7 @@ impl GpuiElement for TextInputElement {
 
         if self.enabled
             && focus_handle.is_focused(window)
+            && prepaint.caret_visible
             && let Some(cursor) = prepaint.cursor.take()
         {
             window.paint_quad(cursor);
@@ -314,6 +328,7 @@ impl LauncherView {
         };
         if self.text_input_is_visible(target) {
             window.focus(&self.text_input_focus_handle(target));
+            self.restart_caret_blink();
         }
     }
 
@@ -471,6 +486,7 @@ impl LauncherView {
         input_state.selected_range = offset..offset;
         input_state.selection_reversed = false;
         input_state.marked_range = None;
+        self.restart_caret_blink();
     }
 
     fn text_input_move_to(
@@ -593,6 +609,7 @@ impl LauncherView {
         input_state.selected_range = selected_range;
         input_state.selection_reversed = false;
         input_state.marked_range = marked_range;
+        self.restart_caret_blink();
         self.text_input_change_did_commit(target, cx);
     }
 

@@ -85,7 +85,11 @@ actions!(
 unsafe extern "C" {}
 
 const LAUNCHER_WIDTH: f32 = 860.0;
-const LAUNCHER_HEIGHT: f32 = 560.0;
+const LAUNCHER_HEIGHT: f32 = 448.0;
+#[cfg(target_os = "linux")]
+const ABOUT_WINDOW_WIDTH: f32 = 380.0;
+#[cfg(target_os = "linux")]
+const ABOUT_WINDOW_HEIGHT: f32 = 280.0;
 #[cfg(target_os = "macos")]
 const TOP_OFFSET: f32 = 146.0;
 #[cfg(target_os = "macos")]
@@ -96,11 +100,10 @@ const WINDOW_OPEN_DURATION_MS: u64 = 120;
 #[cfg(not(target_os = "linux"))]
 const WINDOW_CLOSE_DURATION_MS: u64 = 95;
 const WINDOW_CLOSE_EARLY_EXIT_ALPHA: f32 = 0.08;
-const MAX_VISIBLE_TAG_CHIPS: usize = 5;
-
-const RESULT_ROW_HEIGHT: f32 = 118.0;
+const RESULT_ROW_HEIGHT: f32 = 40.0;
 const RESULTS_LIST_WIDTH_RATIO: f32 = 0.47;
 const PREVIEW_SETTLE_DELAY_MS: u64 = 80;
+const CARET_BLINK_INTERVAL_MS: u64 = 530;
 const PREVIEW_PANE_TEXT_LIMIT: usize = 24_000;
 const PREVIEW_PANE_SYNTAX_MAX_CHARS: usize = 12_000;
 const PREVIEW_PANE_SYNTAX_MAX_LINES: usize = 320;
@@ -772,6 +775,7 @@ fn main() {
         cx.set_global(BackgroundAnchorState {
             window: background_anchor_window,
         });
+        cx.set_global(AboutWindowState { window: None });
         cx.set_global(AutoClearState::default());
         cx.set_global(SelfClipboardWriteState::default());
 

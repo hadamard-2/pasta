@@ -49,6 +49,14 @@ pub(crate) struct BackgroundAnchorState {
 #[cfg(target_os = "linux")]
 impl Global for BackgroundAnchorState {}
 
+#[cfg(target_os = "linux")]
+pub(crate) struct AboutWindowState {
+    pub(crate) window: Option<WindowHandle<AboutView>>,
+}
+
+#[cfg(target_os = "linux")]
+impl Global for AboutWindowState {}
+
 #[derive(Clone)]
 pub(crate) struct PendingAutoClear {
     pub(crate) due_at: Instant,
@@ -94,106 +102,6 @@ fn resolve_app_icon_path() -> Option<String> {
         return Some(dev_icon.to_string_lossy().into_owned());
     }
 
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn resolve_app_icon_path() -> Option<std::path::PathBuf> {
-    // Prefer the installed hicolor icon so the dialog matches whatever the
-    // user sees in their app menu; fall back to the dev copy so `cargo run`
-    // still renders an icon when no install has happened.
-    let candidates = [
-        std::env::var_os("HOME").map(|home| {
-            std::path::PathBuf::from(home)
-                .join(".local/share/icons/hicolor/512x512/apps/com.pasta.launcher.png")
-        }),
-        Some(std::path::PathBuf::from(
-            "/usr/share/icons/hicolor/512x512/apps/com.pasta.launcher.png",
-        )),
-    ];
-    for candidate in candidates.into_iter().flatten() {
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    let exe = std::env::current_exe().ok()?;
-    let exe_parent = exe.parent()?;
-    let dev_icon = exe_parent
-        .parent()?
-        .parent()?
-        .join("assets")
-        .join("pasta.png");
-    if dev_icon.exists() {
-        return Some(dev_icon);
-    }
-
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn show_linux_about_dialog() {
-    let version = env!("CARGO_PKG_VERSION");
-    let plain = format!(
-        "Pasta — v{version}\n\n\
-         The clipboard manager for devs and devops.\n\
-         Blazing-fast, Spotlight-style clipboard launcher\n\
-         built with Rust and GPUI.\n\n\
-         https://github.com/yafetgetachew/pasta",
-    );
-    let icon_path = resolve_app_icon_path();
-    let icon_str = icon_path
-        .as_ref()
-        .and_then(|p| p.to_str())
-        .map(str::to_owned);
-
-    // Prefer kdialog on KDE, then zenity on GTK; fall back to rfd (no icon).
-    if which("kdialog").is_some() {
-        let mut cmd = std::process::Command::new("kdialog");
-        if let Some(icon) = icon_str.as_deref() {
-            cmd.arg("--icon").arg(icon);
-        }
-        cmd.arg("--title").arg("About Pasta");
-        cmd.arg("--msgbox").arg(&plain);
-        if cmd.status().is_ok() {
-            return;
-        }
-    }
-
-    if which("zenity").is_some() {
-        let mut cmd = std::process::Command::new("zenity");
-        cmd.arg("--info");
-        cmd.arg("--title=About Pasta");
-        if let Some(icon) = icon_str.as_deref() {
-            cmd.arg(format!("--window-icon={}", icon));
-        }
-        cmd.arg(format!("--text={}", plain));
-        if cmd.status().is_ok() {
-            return;
-        }
-    }
-
-    rfd::MessageDialog::new()
-        .set_title("About Pasta")
-        .set_description(&plain)
-        .set_level(rfd::MessageLevel::Info)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-}
-
-#[cfg(target_os = "linux")]
-fn which(program: &str) -> Option<std::path::PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(program);
-        let Ok(meta) = candidate.metadata() else {
-            continue;
-        };
-        if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
-            return Some(candidate);
-        }
-    }
     None
 }
 
@@ -271,7 +179,7 @@ fn handle_menu_command(command: MenuCommand, cx: &mut App) {
             }
             #[cfg(target_os = "linux")]
             {
-                std::thread::spawn(show_linux_about_dialog);
+                show_about_window(cx);
             }
         }
         MenuCommand::SetThemeMode(theme_mode) => {
@@ -454,10 +362,16 @@ pub(crate) fn spawn_launcher_transition_loop(cx: &mut App) {
                         let appearance_changed = view.sync_window_appearance(window);
                         let reveal_changed = view.clear_expired_secret_reveal();
                         let reveal_tick_changed = view.secret_countdown_tick_changed();
+                        let caret_blink_changed =
+                            window.is_window_active() && view.caret_blink_tick();
                         let transition_active = view.transition_running();
 
                         if !transition_active {
-                            if appearance_changed || reveal_changed || reveal_tick_changed {
+                            if appearance_changed
+                                || reveal_changed
+                                || reveal_tick_changed
+                                || caret_blink_changed
+                            {
                                 cx.notify();
                             }
                             return;

@@ -5,7 +5,7 @@ pub(crate) mod state;
 mod view;
 
 #[cfg(target_os = "linux")]
-pub(crate) use runtime::BackgroundAnchorState;
+pub(crate) use runtime::{AboutWindowState, BackgroundAnchorState};
 pub(crate) use runtime::{
     AutoClearState, LauncherState, PendingAutoClear, PendingSelfClipboardWrite,
     SelfClipboardWriteState, show_launcher, spawn_clipboard_watcher, spawn_hotkey_listener,

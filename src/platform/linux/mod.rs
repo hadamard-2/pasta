@@ -43,9 +43,10 @@ use wl_clipboard_rs::paste::{
 
 use crate::storage::ClipboardStorage;
 use crate::{
-    AutoClearState, FontChoice, LAUNCHER_HEIGHT, LAUNCHER_WIDTH, LauncherExitIntent, LauncherView,
-    MENU_COMMAND_TX, MenuCommand, NEURAL_STATUS, NeuralStatus, SelfClipboardWriteState, ThemeMode,
-    UiStyleState,
+    ABOUT_WINDOW_HEIGHT, ABOUT_WINDOW_WIDTH, AboutWindowState, AutoClearState, FontChoice,
+    LAUNCHER_HEIGHT, LAUNCHER_WIDTH, LauncherExitIntent, LauncherView, MENU_COMMAND_TX,
+    MenuCommand, NEURAL_STATUS, NeuralStatus, Palette, SelfClipboardWriteState, ThemeMode,
+    UiStyleState, palette_for,
 };
 
 // ---------------------------------------------------------------------------
@@ -1313,7 +1314,11 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
     use gpui::*;
 
     let display_id = cx.primary_display().map(|display| display.id());
-    let bounds = Bounds::centered(display_id, size(px(860.0), px(560.0)), cx);
+    let bounds = Bounds::centered(
+        display_id,
+        size(px(LAUNCHER_WIDTH), px(LAUNCHER_HEIGHT)),
+        cx,
+    );
     let storage = cx.global::<crate::StorageState>().storage.clone();
     let style = cx.global::<UiStyleState>().clone();
     let (search_tx, search_rx, generation_token) =
@@ -1344,7 +1349,7 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
             // user-specified, so Mutter ignores it and runs its own placement
             // (often top-left). Position the still-unmapped window on the primary
             // monitor and set USPosition so the window manager honors it.
-            center_launcher_window_on_primary(window);
+            center_window_on_primary(window, LAUNCHER_WIDTH, LAUNCHER_HEIGHT);
 
             window.on_window_should_close(cx, |_, cx| {
                 cx.hide();
@@ -1408,6 +1413,160 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
 
     crate::app::spawn_search_result_listener(cx, window, search_rx);
     Some(window)
+}
+
+const ABOUT_GITHUB_URL: &str = "https://github.com/yafetgetachew/pasta";
+
+/// Static "About Pasta" panel. Replaces the old kdialog/zenity/rfd dialog
+/// chain, which — being windows the WM placed itself rather than ones we
+/// created and centered — inherited the same off-center Mutter placement bug
+/// the launcher had before `center_window_on_primary`.
+pub(crate) struct AboutView;
+
+impl gpui::Render for AboutView {
+    fn render(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::*;
+
+        let style = cx.global::<UiStyleState>().clone();
+        let palette = palette_for(
+            style.theme_mode.apply(window.appearance()),
+            style.surface_alpha,
+        );
+        let version = env!("CARGO_PKG_VERSION");
+
+        div()
+            .size_full()
+            .bg(palette.window_bg)
+            .font_family(style.family.clone())
+            .font_weight(FontWeight::NORMAL)
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .px_6()
+            .child(
+                div()
+                    .text_size(px(20.0))
+                    .text_color(palette.title_text)
+                    .child("Pasta"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(palette.muted_text)
+                    .child(format!("v{version}")),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .text_sm()
+                    .text_color(palette.row_text)
+                    .text_center()
+                    .child("The clipboard manager for devs and devops."),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(palette.muted_text)
+                    .text_center()
+                    .child("Blazing-fast, Spotlight-style clipboard launcher built with Rust and GPUI."),
+            )
+            .child(
+                div()
+                    .id("about-github-link")
+                    .mt_2()
+                    .text_xs()
+                    .text_color(palette.query_active)
+                    .cursor_pointer()
+                    .on_click(cx.listener(|_, _, _, _| {
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg(ABOUT_GITHUB_URL)
+                            .spawn();
+                    }))
+                    .child("github.com/yafetgetachew/pasta"),
+            )
+            .child(
+                div()
+                    .id("about-close")
+                    .mt_4()
+                    .text_xs()
+                    .text_color(palette.keycap_text)
+                    .bg(palette.keycap_bg)
+                    .rounded(px(4.0))
+                    .px(px(10.0))
+                    .py(px(4.0))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|_, _, window, _| {
+                        window.remove_window();
+                    }))
+                    .child("Close"),
+            )
+    }
+}
+
+fn create_about_window(cx: &mut App) -> Option<WindowHandle<AboutView>> {
+    use gpui::*;
+
+    let display_id = cx.primary_display().map(|display| display.id());
+    let bounds = Bounds::centered(
+        display_id,
+        size(px(ABOUT_WINDOW_WIDTH), px(ABOUT_WINDOW_HEIGHT)),
+        cx,
+    );
+
+    match cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some("About Pasta".into()),
+                ..Default::default()
+            }),
+            focus: true,
+            show: true,
+            kind: WindowKind::Normal,
+            is_movable: true,
+            is_resizable: false,
+            is_minimizable: false,
+            window_decorations: Some(WindowDecorations::Server),
+            display_id,
+            ..Default::default()
+        },
+        move |window, cx| {
+            // Same Mutter placement bug as the launcher: an unmarked "centered"
+            // request is advisory only, so pin the position ourselves.
+            center_window_on_primary(window, ABOUT_WINDOW_WIDTH, ABOUT_WINDOW_HEIGHT);
+            cx.new(|_| AboutView)
+        },
+    ) {
+        Ok(window) => Some(window),
+        Err(err) => {
+            eprintln!("warning: failed to open About window: {err}");
+            None
+        }
+    }
+}
+
+/// Show the About window, reusing the existing one (bringing it to front)
+/// rather than opening a second copy if it's already open.
+pub(crate) fn show_about_window(cx: &mut App) {
+    if let Some(window) = cx
+        .try_global::<AboutWindowState>()
+        .and_then(|state| state.window)
+        && window
+            .update(cx, |_, window, _cx| window.activate_window())
+            .is_ok()
+    {
+        return;
+    }
+
+    if let Some(created) = create_about_window(cx) {
+        cx.global_mut::<AboutWindowState>().window = Some(created);
+    }
 }
 
 /// Set the window to move to the active workspace/space. No-op on Wayland.
@@ -1576,17 +1735,18 @@ fn primary_monitor_rect(conn: &impl x11rb::connection::Connection, root: u32) ->
     ))
 }
 
-/// Center the launcher window on the primary monitor and pin the position so the
-/// window manager does not re-place it. No-op on Wayland (the compositor owns
-/// window placement there) and best-effort on X11 — any failure leaves GPUI's
-/// default behavior untouched.
+/// Center a still-unmapped window on the primary monitor and pin the position
+/// so the window manager does not re-place it. No-op on Wayland (the
+/// compositor owns window placement there) and best-effort on X11 — any
+/// failure leaves GPUI's default behavior untouched. `want_width`/`want_height`
+/// must match the window's logical size, since that's how it's located below.
 ///
 /// GPUI 0.2.2's X11 backend leaves `HasWindowHandle` unimplemented, so we cannot
 /// ask it for the window id. Instead we locate the freshly-created, still
-/// unmapped launcher on the X server by matching GPUI's `_NET_WM_PID` stamp
-/// (our process) and the launcher's device size (which distinguishes it from the
-/// 1x1 background-anchor window that shares our PID).
-fn center_launcher_window_on_primary(window: &Window) {
+/// unmapped window on the X server by matching GPUI's `_NET_WM_PID` stamp (our
+/// process) and its device size (which distinguishes it from any other window
+/// — e.g. the 1x1 background-anchor window — that shares our PID).
+fn center_window_on_primary(window: &Window, want_width: f32, want_height: f32) {
     use x11rb::connection::Connection;
     use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
     use x11rb::protocol::xproto::{AtomEnum, ConfigureWindowAux, ConnectionExt as _};
@@ -1596,8 +1756,8 @@ fn center_launcher_window_on_primary(window: &Window) {
     }
 
     let scale = window.scale_factor();
-    let want_w = (crate::LAUNCHER_WIDTH * scale).round() as i32;
-    let want_h = (crate::LAUNCHER_HEIGHT * scale).round() as i32;
+    let want_w = (want_width * scale).round() as i32;
+    let want_h = (want_height * scale).round() as i32;
 
     let (conn, screen_num) = match x11rb::connect(None) {
         Ok(pair) => pair,

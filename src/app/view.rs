@@ -78,38 +78,22 @@ impl Render for LauncherView {
             .bg(palette.window_bg)
             .border_1()
             .border_color(palette.window_border)
-            .rounded_2xl()
-            .overflow_hidden();
+            .rounded(px(10.0))
+            .overflow_hidden()
+            .flex()
+            .flex_col();
         if self.transition_target > 0.0 && self.transition_alpha > 0.35 {
             panel = panel.shadow_xl();
         }
 
-        let mut content = panel
-            .px_4()
-            .py_3()
+        let mut content = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .px_3()
+            .pt_2()
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(palette.title_text)
-                            .child("PASTA"),
-                    )
-                    .child(div().text_xs().text_color(palette.muted_text).child(
-                        if cfg!(target_os = "macos") {
-                            "⌥ + SPACE"
-                        } else {
-                            "Meta + Space"
-                        },
-                    )),
-            )
             .child({
                 let mut query_container = div()
                     .w_full()
@@ -180,18 +164,9 @@ impl Render for LauncherView {
                         }));
                 }
 
-                if query_focused && query_input_enabled {
-                    query_container = query_container
-                        .bg(scale_alpha(
-                            palette.selected_bg,
-                            if palette.dark { 0.95 } else { 0.75 },
-                        ))
-                        .border_1()
-                        .border_color(scale_alpha(
-                            palette.selected_border,
-                            if palette.dark { 0.58 } else { 0.52 },
-                        ));
-                }
+                // The search field sits directly on the canvas — no border, no
+                // background fill, focused or not (section 4 of the design system).
+                let _ = query_focused;
 
                 div()
                     .w_full()
@@ -1336,49 +1311,134 @@ impl Render for LauncherView {
                     .child(self.render_preview_pane(palette)),
             );
 
-        content
+        content = content
             .child(div().w_full().h(px(1.0)).bg(palette.list_divider))
-            .child(workspace)
-            .child(if self.show_command_help {
+            .child(workspace);
+
+        // The full command reference expands above the permanent action bar.
+        if self.show_command_help {
+            content = content.child(
                 div()
                     .w_full()
                     .flex_none()
-                    .p_2()
-                    .bg(scale_alpha(
-                        palette.row_hover_bg,
-                        if palette.dark { 0.95 } else { 1.0 },
-                    ))
-                    .border_1()
-                    .border_color(scale_alpha(
-                        palette.window_border,
-                        if palette.dark { 0.9 } else { 1.0 },
-                    ))
-                    .rounded_lg()
+                    .pb_2()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .child(
                         div()
                             .text_xs()
-                            .text_color(palette.title_text)
+                            .text_color(palette.muted_text)
                             .child("Commands"),
                     )
-                    .child(render_help_run(&command_help_tips(), palette))
-            } else {
-                div()
-                    .w_full()
-                    .text_xs()
-                    .text_color(palette.muted_text)
-                    .child(if cfg!(target_os = "macos") {
-                        "⌘H commands"
-                    } else {
-                        "Ctrl+H commands"
-                    })
-            })
+                    .child(render_help_run(&command_help_tips(), palette)),
+            );
+        }
+
+        panel
+            .child(content)
+            .child(self.render_action_bar(palette, cx))
     }
 }
 
 impl LauncherView {
+    /// The permanent bottom bar. It names the primary action for the current
+    /// selection and an always-available Commands entry, both with keycaps, so
+    /// the app reads as keyboard-first before a key is pressed.
+    fn render_action_bar(&self, palette: Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let (primary_label, primary_key) = match self.items.get(self.selected_index) {
+            Some(item)
+                if item.item_type == ClipboardItemType::Password
+                    && self.is_secret_masked(item.id) =>
+            {
+                (
+                    "Reveal",
+                    if cfg!(target_os = "macos") {
+                        "⌘R"
+                    } else {
+                        "Ctrl+R"
+                    },
+                )
+            }
+            _ => ("Copy", "↵"),
+        };
+        let commands_key = if cfg!(target_os = "macos") {
+            "⌘H"
+        } else {
+            "Ctrl+H"
+        };
+
+        div()
+            .w_full()
+            .flex_none()
+            .h(px(40.0))
+            .px_3()
+            .flex()
+            .items_center()
+            .justify_between()
+            .bg(palette.action_bar_bg)
+            // GPUI's overflow_hidden clips children to a rectangular bounds mask,
+            // not the panel's rounded corner shape, so this full-bleed background
+            // needs its own matching radius or its flat corners show past the
+            // panel's curve at the bottom edge.
+            .rounded_bl(px(9.0))
+            .rounded_br(px(9.0))
+            .border_t_1()
+            .border_color(palette.list_divider)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(div().size(px(6.0)).rounded_full().bg(palette.muted_text))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(palette.muted_text)
+                            .child("Clipboard history"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(palette.row_text)
+                                    .child(primary_label),
+                            )
+                            .child(keycap(primary_key, palette)),
+                    )
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(palette.list_divider))
+                    .child(
+                        div()
+                            .id("action-bar-commands")
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_command_help = !this.show_command_help;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(palette.row_text)
+                                    .child("Commands"),
+                            )
+                            .child(keycap(commands_key, palette)),
+                    ),
+            )
+    }
+
     fn render_tag_search_suggestions(
         &self,
         palette: Palette,
@@ -1512,28 +1572,6 @@ impl LauncherView {
             row_data.collapsed_preview.clone()
         };
         let created_detail = format_timestamp_detail(&item.created_at);
-        let primary_action_hint = if is_masked_secret {
-            if cfg!(target_os = "macos") {
-                "⌘R Reveal"
-            } else {
-                "Ctrl+R Reveal"
-            }
-        } else {
-            "⏎ Copy"
-        };
-        let secret_action_hint = if item.item_type == ClipboardItemType::Password {
-            if cfg!(target_os = "macos") {
-                "⌘⇧S Unmark secret"
-            } else {
-                "Ctrl+Shift+S Unmark secret"
-            }
-        } else {
-            if cfg!(target_os = "macos") {
-                "⌘⇧S Mark secret"
-            } else {
-                "Ctrl+Shift+S Mark secret"
-            }
-        };
         let preview_syntax_enabled = self.syntax_highlighting
             && self.query.trim().is_empty()
             && !is_masked_secret
@@ -1542,63 +1580,12 @@ impl LauncherView {
             && row_data.expanded_preview.len() <= PREVIEW_PANE_SYNTAX_MAX_CHARS
             && row_data.expanded_preview_line_count <= PREVIEW_PANE_SYNTAX_MAX_LINES;
 
-        let mut item_tags = row_data.base_tags.clone();
-        if item.item_type == ClipboardItemType::Password {
-            if let Some(seconds) = self.secret_seconds_left(item.id) {
-                item_tags.insert(0, format!("OPEN {seconds}s"));
-            } else {
-                item_tags.insert(0, "LOCKED".to_owned());
-            }
-        }
-
-        let mut tag_row = div().w_full().flex().flex_row().flex_wrap().gap_1();
-        for tag in item_tags.iter() {
-            tag_row = tag_row.child(
-                div()
-                    .text_size(px(10.0))
-                    .line_height(px(14.0))
-                    .text_color(tag_chip_color(tag, palette.dark))
-                    .bg(scale_alpha(
-                        palette.row_hover_bg,
-                        if palette.dark { 0.96 } else { 1.0 },
-                    ))
-                    .border_1()
-                    .border_color(scale_alpha(
-                        palette.window_border,
-                        if palette.dark { 0.9 } else { 1.0 },
-                    ))
-                    .rounded_sm()
-                    .px(px(4.0))
-                    .child(tag.clone()),
-            );
-        }
-
         pane = pane.child(
             div()
                 .w_full()
-                .flex()
-                .flex_col()
-                .items_start()
-                .gap_1()
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .items_start()
-                        .gap_1()
-                        .child(result_meta_chip(primary_action_hint, palette))
-                        .child(result_meta_chip(secret_action_hint, palette)),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .text_xs()
-                        .text_color(palette.row_meta_text)
-                        .child(created_detail),
-                )
-                .child(tag_row),
+                .text_xs()
+                .text_color(palette.row_meta_text)
+                .child(created_detail),
         );
 
         if !item.description.trim().is_empty() {
@@ -1728,61 +1715,42 @@ impl LauncherView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let is_selected = ix == self.selected_index;
-        let mut item_tags = row_data.base_tags.clone();
-        if item.item_type == ClipboardItemType::Password {
-            if let Some(seconds) = self.secret_seconds_left(item.id) {
-                item_tags.insert(0, format!("OPEN {seconds}s"));
-            } else {
-                item_tags.insert(0, "LOCKED".to_owned());
-            }
-        }
-        let is_masked_secret =
-            item.item_type == ClipboardItemType::Password && self.is_secret_masked(item.id);
-        let item_preview = if is_masked_secret {
-            row_data.masked_preview.clone()
+
+        // The only inline chip a dense row keeps is secret state.
+        let secret_pill = if item.item_type == ClipboardItemType::Password {
+            Some(
+                self.secret_seconds_left(item.id)
+                    .map(|seconds| format!("OPEN {seconds}s"))
+                    .unwrap_or_else(|| "LOCKED".to_owned()),
+            )
         } else {
-            row_data.collapsed_preview.clone()
-        };
-        let preview_language = if is_masked_secret {
             None
-        } else {
-            row_data.detected_language
         };
-        let row_syntax_enabled = false;
 
-        let default_row_bg =
-            scale_alpha(palette.row_hover_bg, if palette.dark { 0.62 } else { 0.92 });
-        let default_row_border = scale_alpha(
-            palette.window_border,
-            if palette.dark { 0.78 } else { 0.88 },
-        );
-
-        let mut row = div()
-            .id(("result", item.id as u64))
-            .w_full()
-            .h_full()
-            .p_1()
-            .rounded_lg()
-            .overflow_hidden()
-            .bg(if is_selected {
-                palette.selected_bg
-            } else {
-                default_row_bg
-            })
-            .border_1()
-            .border_color(if is_selected {
-                palette.selected_border
-            } else {
-                default_row_border
-            });
-        if !info_editor_open
+        let interactive = !info_editor_open
             && !tag_editor_open
             && !bowl_editor_open
             && !parameter_editor_open
             && !parameter_fill_open
-            && !transform_menu_open
-        {
-            row = row
+            && !transform_menu_open;
+
+        // Selection is fill only — a flat rounded pill, no border, inset from the
+        // pane edge by the wrapper's horizontal padding.
+        let mut fill = div()
+            .id(("result", item.id as u64))
+            .w_full()
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .px(px(8.0))
+            .rounded_md()
+            .overflow_hidden();
+        if is_selected {
+            fill = fill.bg(palette.selected_bg);
+        }
+        if interactive {
+            fill = fill
                 .hover({
                     let row_hover = palette.row_hover_bg;
                     move |style| style.bg(row_hover)
@@ -1793,70 +1761,60 @@ impl LauncherView {
                 }));
         }
 
-        let mut tag_row = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .content_start()
-            .gap_1()
-            .overflow_hidden();
-        for tag in item_tags.iter() {
-            tag_row = tag_row.child(result_meta_chip(tag, palette));
-        }
-        row =
-            row.child(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(tag_row)
-                    .child({
-                        let mut meta_row = div()
-                            .w_full()
-                            .flex()
-                            .justify_between()
-                            .items_center()
-                            .gap_2();
-                        if let Some(bowl_name) = &row_data.bowl_name {
-                            meta_row =
-                                meta_row.child(div().min_w(px(0.0)).overflow_hidden().child(
-                                    result_meta_chip(&format!("BOWL:{bowl_name}"), palette),
-                                ));
-                        } else {
-                            meta_row = meta_row.child(div().min_w(px(0.0)));
-                        }
-                        meta_row.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(palette.row_meta_text)
-                                .child(row_data.created_label.clone()),
-                        )
-                    }),
-            );
+        // Leading type icon — the one spot color lands on in the list.
+        fill = fill.child(
+            div()
+                .flex_none()
+                .w(px(15.0))
+                .flex()
+                .justify_center()
+                .text_size(px(13.0))
+                .text_color(type_color(item.item_type, palette.dark))
+                .child(type_icon_glyph(item.item_type)),
+        );
 
-        let preview_block = div()
-            .w_full()
-            .mt_1()
-            .text_sm()
-            .text_color(palette.row_text)
-            .whitespace_normal()
-            .max_h(px(72.0))
-            .overflow_hidden();
-        row = row.child(preview_block.child(syntax_styled_text(
-            &item_preview,
-            preview_language,
-            row_syntax_enabled,
-            palette.dark,
-        )));
+        // Title — single line, ellipsized on overflow.
+        fill = fill.child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_size(px(13.0))
+                .text_color(palette.row_text)
+                .child(row_data.title.clone()),
+        );
+
+        if let Some(pill) = secret_pill {
+            fill = fill.child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.0))
+                    .line_height(px(14.0))
+                    .text_color(tag_chip_color(&pill, palette.dark))
+                    .bg(palette.keycap_bg)
+                    .rounded(px(4.0))
+                    .px(px(6.0))
+                    .py(px(1.0))
+                    .whitespace_nowrap()
+                    .child(pill),
+            );
+        }
+
+        // Trailing timestamp.
+        fill = fill.child(
+            div()
+                .flex_none()
+                .text_size(px(11.0))
+                .text_color(palette.row_meta_text)
+                .child(row_data.created_label.clone()),
+        );
 
         div()
             .w_full()
             .h(px(RESULT_ROW_HEIGHT))
-            .py(px(4.0))
-            .child(row)
+            .px(px(8.0))
+            .py(px(2.0))
+            .child(fill)
             .into_any_element()
     }
 }
@@ -1878,23 +1836,17 @@ fn search_suggestion_label(query: &str, suggestion: &str) -> String {
     }
 }
 
-fn result_meta_chip(label: &str, palette: Palette) -> impl IntoElement {
+/// A small key-hint pill, reused across the action bar and hints.
+fn keycap(label: &str, palette: Palette) -> impl IntoElement {
     div()
         .flex_none()
-        .text_size(px(10.0))
+        .text_size(px(11.0))
         .line_height(px(14.0))
-        .text_color(tag_chip_color(label, palette.dark))
-        .bg(scale_alpha(
-            palette.row_hover_bg,
-            if palette.dark { 0.95 } else { 1.0 },
-        ))
-        .border_1()
-        .border_color(scale_alpha(
-            palette.window_border,
-            if palette.dark { 0.85 } else { 1.0 },
-        ))
-        .rounded_sm()
-        .px(px(4.0))
+        .text_color(palette.keycap_text)
+        .bg(palette.keycap_bg)
+        .rounded(px(4.0))
+        .px(px(6.0))
+        .py(px(2.0))
         .whitespace_nowrap()
         .child(label.to_owned())
 }

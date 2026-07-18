@@ -91,6 +91,8 @@ impl LauncherView {
             suppress_auto_hide_until: None,
             show_command_help: false,
             last_window_appearance: None,
+            caret_visible: true,
+            caret_blink_due_at: Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS),
         };
         view.begin_search_generation();
         view.request_search(SearchExecution::Fast);
@@ -481,6 +483,27 @@ impl LauncherView {
         }
         self.last_reveal_second_bucket = Some(bucket);
         true
+    }
+
+    /// Toggles the text-input caret on a fixed interval. Returns whether the
+    /// visibility changed, so the caller only repaints when the blink state
+    /// actually flipped.
+    pub(crate) fn caret_blink_tick(&mut self) -> bool {
+        let now = Instant::now();
+        if now < self.caret_blink_due_at {
+            return false;
+        }
+        self.caret_visible = !self.caret_visible;
+        self.caret_blink_due_at = now + Duration::from_millis(CARET_BLINK_INTERVAL_MS);
+        true
+    }
+
+    /// Resets the caret to solid-visible and restarts the blink cycle. Call
+    /// whenever a text field gains focus or its content changes, so the caret
+    /// doesn't appear to vanish mid-blink right after a keystroke.
+    pub(crate) fn restart_caret_blink(&mut self) {
+        self.caret_visible = true;
+        self.caret_blink_due_at = Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS);
     }
 
     pub(crate) fn refresh_items(&mut self, execution: SearchExecution) {

@@ -58,10 +58,9 @@ impl TextInputState {
 }
 
 pub(crate) struct CachedRowPresentation {
+    pub(crate) title: String,
     pub(crate) created_label: String,
     pub(crate) detected_language: Option<LanguageTag>,
-    pub(crate) base_tags: Vec<String>,
-    pub(crate) bowl_name: Option<String>,
     pub(crate) collapsed_preview: String,
     pub(crate) expanded_preview: String,
     pub(crate) expanded_preview_line_count: usize,
@@ -72,30 +71,18 @@ pub(crate) struct CachedRowPresentation {
 impl CachedRowPresentation {
     pub(crate) fn from_record(item: &ClipboardRecord) -> Self {
         let detected_language = detect_language(item.item_type, &item.content);
-        let bowl_name = bowl_name_from_tags(&item.tags);
-        let visible_tags = tags_without_bowl(&item.tags);
-        let mut base_tags = visible_tag_chips(item.item_type, detected_language, &visible_tags);
-        if !item.description.trim().is_empty() {
-            base_tags.insert(0, "INFO".to_owned());
-        }
-        if !item.parameters.is_empty() {
-            base_tags.insert(0, "PARAM".to_owned());
-            for parameter in item.parameters.iter().take(2) {
-                base_tags.push(format!("P:{}", parameter.name.to_ascii_uppercase()));
-            }
-        }
 
         let expanded_preview_full = expanded_preview_content(&item.content);
         let (expanded_preview, expanded_preview_truncated) =
             bounded_preview_content(&expanded_preview_full, PREVIEW_PANE_TEXT_LIMIT);
         let expanded_preview_line_count = expanded_preview.lines().count();
         let collapsed_preview = preview_content(&item.content);
+        let title = single_line_title(&item.content, &collapsed_preview);
 
         Self {
+            title,
             created_label: format_timestamp(&item.created_at),
             detected_language,
-            base_tags,
-            bowl_name,
             collapsed_preview,
             expanded_preview,
             expanded_preview_line_count,
@@ -106,6 +93,23 @@ impl CachedRowPresentation {
 
     pub(crate) fn collect(items: &[ClipboardRecord]) -> Vec<Self> {
         items.iter().map(Self::from_record).collect()
+    }
+}
+
+/// Collapse a clip's content to a single trimmed line suitable for a dense list
+/// row: the first non-blank line, with interior runs of whitespace squeezed so
+/// leading indentation or tabs never blow out the row width.
+fn single_line_title(content: &str, fallback: &str) -> String {
+    let source = content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_else(|| fallback.lines().next().unwrap_or("").trim());
+    let collapsed = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        "Empty".to_owned()
+    } else {
+        collapsed
     }
 }
 
@@ -232,4 +236,6 @@ pub(crate) struct LauncherView {
     pub(crate) suppress_auto_hide_until: Option<Instant>,
     pub(crate) show_command_help: bool,
     pub(crate) last_window_appearance: Option<WindowAppearance>,
+    pub(crate) caret_visible: bool,
+    pub(crate) caret_blink_due_at: Instant,
 }

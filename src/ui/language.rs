@@ -21,27 +21,6 @@ pub(crate) enum LanguageTag {
 }
 
 impl LanguageTag {
-    pub(crate) fn label(&self) -> &'static str {
-        match self {
-            Self::Bash => "BASH",
-            Self::Rust => "RUST",
-            Self::Python => "PY",
-            Self::TypeScript => "TS",
-            Self::JavaScript => "JS",
-            Self::Go => "GO",
-            Self::Java => "JAVA",
-            Self::Cpp => "C++",
-            Self::Sql => "SQL",
-            Self::Json => "JSON",
-            Self::Yaml => "YAML",
-            Self::Html => "HTML",
-            Self::Css => "CSS",
-            Self::Markdown => "MD",
-            Self::Toml => "TOML",
-            Self::Code => "CODE",
-        }
-    }
-
     pub(crate) fn storage_alias(&self) -> Option<&'static str> {
         Some(match self {
             Self::Bash => "bash",
