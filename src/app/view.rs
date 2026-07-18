@@ -181,7 +181,7 @@ impl Render for LauncherView {
                         .child(div().flex_1().min_w(px(0.0)).child(TextInputElement::new(
                             cx.entity(),
                             TextInputTarget::Query,
-                            "Search snippets, commands, and passwords…",
+                            "Search clipboard",
                             palette,
                             query_input_enabled,
                         ))),
