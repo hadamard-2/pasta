@@ -49,6 +49,10 @@ pub(crate) keycap_bg: gpui::Rgba,       // dark: 0x2A2A2Eff
 pub(crate) keycap_text: gpui::Rgba,     // dark: 0x8A8A8Fff
 ```
 
+### Brand accent
+
+`accent` is `0x00664Cff`, Pasta's brand color. The grayscale ladder above is still the rule, not the exception — this is a deliberate, narrow departure, not a new token to reach for. It currently lands in exactly two places: the small status dot in the action bar (`render_action_bar`), and the primary-action keycap (`primary_keycap`, distinct from the neutral `keycap` used everywhere else). Resist spreading it further; if a new spot seems to need it, prefer the neutral ladder first and treat accent placement as an explicit design decision, not a default.
+
 ### Light mode
 
 | `Palette` field     | New value    |

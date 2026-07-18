@@ -1402,7 +1402,7 @@ impl LauncherView {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(div().size(px(6.0)).rounded_full().bg(palette.muted_text))
+                    .child(div().size(px(6.0)).rounded_full().bg(palette.accent))
                     .child(
                         div()
                             .text_size(px(12.0))
@@ -1426,7 +1426,7 @@ impl LauncherView {
                                     .text_color(palette.row_text)
                                     .child(primary_label),
                             )
-                            .child(keycap(primary_key, palette)),
+                            .child(primary_keycap(primary_key, palette)),
                     )
                     .child(div().w(px(1.0)).h(px(16.0)).bg(palette.list_divider))
                     .child(
@@ -1862,6 +1862,23 @@ fn keycap(label: &str, palette: Palette) -> impl IntoElement {
         .line_height(px(14.0))
         .text_color(palette.keycap_text)
         .bg(palette.keycap_bg)
+        .rounded(px(4.0))
+        .px(px(6.0))
+        .py(px(2.0))
+        .whitespace_nowrap()
+        .child(label.to_owned())
+}
+
+/// The action bar's primary-action keycap — the one place a keycap gets the
+/// brand accent instead of the neutral keycap fill, so the default action
+/// reads as the obvious one to press.
+fn primary_keycap(label: &str, palette: Palette) -> impl IntoElement {
+    div()
+        .flex_none()
+        .text_size(px(11.0))
+        .line_height(px(14.0))
+        .text_color(palette.query_active)
+        .bg(palette.accent)
         .rounded(px(4.0))
         .px(px(6.0))
         .py(px(2.0))

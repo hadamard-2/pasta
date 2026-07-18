@@ -19,6 +19,10 @@ pub(crate) struct Palette {
     pub(crate) action_bar_bg: gpui::Rgba,
     pub(crate) keycap_bg: gpui::Rgba,
     pub(crate) keycap_text: gpui::Rgba,
+    /// Pasta's brand accent, used sparingly (the action bar status dot,
+    /// the primary action keycap) — the rest of the UI stays on the
+    /// neutral gray ladder by design.
+    pub(crate) accent: gpui::Rgba,
 }
 
 pub(crate) fn palette_for(surface_alpha: f32) -> Palette {
@@ -43,6 +47,7 @@ pub(crate) fn palette_for(surface_alpha: f32) -> Palette {
         action_bar_bg: rgba(0x1C1C1Fff),
         keycap_bg: rgba(0x2A2A2Eff),
         keycap_text: rgba(0x8A8A8Fff),
+        accent: rgba(0x00664Cff),
     };
 
     // Scale window surface elements by the fixed alpha factor.
