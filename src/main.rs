@@ -39,8 +39,8 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, Global, GlobalElementId, InspectorElementId, KeyBinding,
     KeystrokeEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, Render, ScrollStrategy, ShapedLine, SharedString, Style, TextRun,
-    UTF16Selection, UnderlineStyle, UniformListScrollHandle, Window, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
+    UTF16Selection, UnderlineStyle, UniformListScrollHandle, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
     div, fill, point, prelude::*, px, relative, rgb, rgba, size, uniform_list,
 };
 #[cfg(target_os = "macos")]
@@ -120,10 +120,9 @@ impl Global for StorageState {}
 
 #[derive(Clone)]
 pub(crate) struct UiStyleState {
-    pub family: SharedString,
+    pub ui_font_family: SharedString,
+    pub content_font_family: SharedString,
     pub surface_alpha: f32,
-    pub theme_mode: ThemeMode,
-    pub syntax_highlighting: bool,
     pub secret_auto_clear: bool,
     pub pasta_brain_enabled: bool,
 }
@@ -132,11 +131,7 @@ impl Global for UiStyleState {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct PersistedUiStyleState {
-    pub(crate) family: String,
     pub(crate) surface_alpha: f32,
-    #[serde(default)]
-    pub(crate) theme_mode: ThemeMode,
-    pub(crate) syntax_highlighting: bool,
     pub(crate) secret_auto_clear: bool,
     #[serde(default = "default_pasta_brain_enabled")]
     pub(crate) pasta_brain_enabled: bool,
@@ -144,25 +139,6 @@ pub(crate) struct PersistedUiStyleState {
 
 fn default_pasta_brain_enabled() -> bool {
     false
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ThemeMode {
-    #[default]
-    System,
-    Light,
-    Dark,
-}
-
-impl ThemeMode {
-    pub(crate) fn apply(self, appearance: WindowAppearance) -> WindowAppearance {
-        match self {
-            Self::System => appearance,
-            Self::Light => WindowAppearance::Light,
-            Self::Dark => WindowAppearance::Dark,
-        }
-    }
 }
 
 // Menu-item tag constants. Used by the macOS NSMenu dispatch table and by the
@@ -173,13 +149,7 @@ pub(crate) const MENU_TAG_SHOW: isize = 1;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const MENU_TAG_QUIT: isize = 2;
 #[cfg(any(target_os = "macos", test))]
-pub(crate) const MENU_TAG_FONT_BASE: isize = 100;
-#[cfg(any(target_os = "macos", test))]
 pub(crate) const MENU_TAG_ABOUT: isize = 200;
-#[cfg(any(target_os = "macos", test))]
-pub(crate) const MENU_TAG_SYNTAX_ON: isize = 300;
-#[cfg(any(target_os = "macos", test))]
-pub(crate) const MENU_TAG_SYNTAX_OFF: isize = 301;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const MENU_TAG_SECRET_CLEAR_ON: isize = 302;
 #[cfg(any(target_os = "macos", test))]
@@ -191,12 +161,6 @@ pub(crate) const MENU_TAG_BRAIN_OFF: isize = 305;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const MENU_TAG_BRAIN_DOWNLOAD: isize = 306;
 #[cfg(any(target_os = "macos", test))]
-pub(crate) const MENU_TAG_THEME_SYSTEM: isize = 307;
-#[cfg(any(target_os = "macos", test))]
-pub(crate) const MENU_TAG_THEME_LIGHT: isize = 308;
-#[cfg(any(target_os = "macos", test))]
-pub(crate) const MENU_TAG_THEME_DARK: isize = 309;
-#[cfg(any(target_os = "macos", test))]
 pub(crate) const MENU_TAG_CLEAR_HISTORY: isize = 310;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const MENU_TAG_LAUNCH_AT_LOGIN: isize = 311;
@@ -207,13 +171,11 @@ static MENU_COMMAND_TX: OnceLock<mpsc::Sender<MenuCommand>> = OnceLock::new();
 pub(crate) enum MenuCommand {
     ShowLauncher,
     QuitApp,
-    SetFont(FontChoice),
     ShowAbout,
-    SetThemeMode(ThemeMode),
-    SetSyntaxHighlighting(bool),
     SetSecretAutoClear(bool),
     SetPastaBrain(bool),
     DownloadBrain,
+    NeuralStatusChanged,
     RequestClearHistory,
     PerformClearHistory,
     ToggleLaunchAtLogin,
@@ -228,88 +190,6 @@ pub(crate) enum NeuralStatus {
 
 pub(crate) static NEURAL_STATUS: std::sync::Mutex<NeuralStatus> =
     std::sync::Mutex::new(NeuralStatus::Loading);
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum FontChoice {
-    MesloLg,
-    Iosevka,
-    IbmPlexMono,
-    JetBrainsMono,
-    SourceCodePro,
-    Monaspace,
-    InputMono,
-}
-
-impl FontChoice {
-    pub(crate) const ALL: [Self; 7] = [
-        Self::MesloLg,
-        Self::Iosevka,
-        Self::IbmPlexMono,
-        Self::JetBrainsMono,
-        Self::SourceCodePro,
-        Self::Monaspace,
-        Self::InputMono,
-    ];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::MesloLg => "Meslo LG",
-            Self::Iosevka => "Iosevka",
-            Self::IbmPlexMono => "IBM Plex Mono",
-            Self::JetBrainsMono => "JetBrains Mono",
-            Self::SourceCodePro => "Source Code Pro",
-            Self::Monaspace => "Monaspace",
-            Self::InputMono => "Input Mono",
-        }
-    }
-
-    pub(crate) fn candidates(self) -> &'static [&'static str] {
-        match self {
-            Self::MesloLg => &[
-                "MesloLGS NF",
-                "MesloLGSNF-Regular",
-                "Meslo LG S",
-                "Meslo LG",
-            ],
-            Self::Iosevka => &[
-                "IosevkaTermNerdFont-Light",
-                "IosevkaTermNerdFont",
-                "IosevkaTerm Nerd Font Mono",
-                "IosevkaTerm Nerd Font",
-                "Iosevka Term",
-                "Iosevka",
-            ],
-            Self::IbmPlexMono => &["IBMPlexMono-Light", "IBMPlexMono", "IBM Plex Mono"],
-            Self::JetBrainsMono => &["JetBrainsMono-Light", "JetBrainsMono", "JetBrains Mono"],
-            Self::SourceCodePro => &["SourceCodePro-Var", "SourceCodePro", "Source Code Pro"],
-            Self::Monaspace => &[
-                "MonaspaceNeonFrozen-Light",
-                "MonaspaceNeonFrozen",
-                "Monaspace Neon Frozen",
-                "Monaspace Neon",
-                "Monaspace",
-            ],
-            Self::InputMono => &["Input Mono", "InputMono"],
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn matches_family(self, family: &str) -> bool {
-        let fam_norm: String = family
-            .chars()
-            .filter(|ch| ch.is_ascii_alphanumeric())
-            .map(|ch| ch.to_ascii_lowercase())
-            .collect();
-        self.candidates().iter().any(|c| {
-            let c_norm: String = c
-                .chars()
-                .filter(|ch| ch.is_ascii_alphanumeric())
-                .map(|ch| ch.to_ascii_lowercase())
-                .collect();
-            fam_norm.contains(&c_norm) || c_norm.contains(&fam_norm)
-        })
-    }
-}
 
 #[derive(Clone, Copy)]
 enum LauncherExitIntent {
@@ -518,14 +398,6 @@ mod tests {
             Some(MenuCommand::QuitApp)
         ));
         assert!(matches!(
-            menu_command_from_tag(MENU_TAG_SYNTAX_ON),
-            Some(MenuCommand::SetSyntaxHighlighting(true))
-        ));
-        assert!(matches!(
-            menu_command_from_tag(MENU_TAG_SYNTAX_OFF),
-            Some(MenuCommand::SetSyntaxHighlighting(false))
-        ));
-        assert!(matches!(
             menu_command_from_tag(MENU_TAG_SECRET_CLEAR_ON),
             Some(MenuCommand::SetSecretAutoClear(true))
         ));
@@ -593,6 +465,12 @@ pub(crate) fn spawn_neural_init(storage: Arc<ClipboardStorage>) {
                         "Model unavailable — using keyword search. Retry from the menu bar.",
                     );
                 }
+            }
+            // The tray only rebuilds its menu when explicitly told to, so nudge it
+            // now that NEURAL_STATUS has settled — otherwise the label stays on
+            // whatever it was when the tray was last synced (typically "Downloading...").
+            if let Some(tx) = MENU_COMMAND_TX.get() {
+                let _ = tx.send(MenuCommand::NeuralStatusChanged);
             }
         })
         .ok();

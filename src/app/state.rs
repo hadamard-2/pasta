@@ -173,10 +173,9 @@ pub(crate) fn start_search_worker(
 
 pub(crate) struct LauncherView {
     pub(crate) storage: Arc<ClipboardStorage>,
-    pub(crate) font_family: SharedString,
+    pub(crate) ui_font_family: SharedString,
+    pub(crate) content_font_family: SharedString,
     pub(crate) surface_alpha: f32,
-    pub(crate) theme_mode: ThemeMode,
-    pub(crate) syntax_highlighting: bool,
     pub(crate) pasta_brain_enabled: bool,
     pub(crate) query_input_state: TextInputState,
     pub(crate) info_editor_input_state: TextInputState,
@@ -235,7 +234,6 @@ pub(crate) struct LauncherView {
     pub(crate) suppress_auto_hide: bool,
     pub(crate) suppress_auto_hide_until: Option<Instant>,
     pub(crate) show_command_help: bool,
-    pub(crate) last_window_appearance: Option<WindowAppearance>,
     pub(crate) caret_visible: bool,
     pub(crate) caret_blink_due_at: Instant,
 }

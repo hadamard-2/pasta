@@ -43,10 +43,9 @@ use wl_clipboard_rs::paste::{
 
 use crate::storage::ClipboardStorage;
 use crate::{
-    ABOUT_WINDOW_HEIGHT, ABOUT_WINDOW_WIDTH, AboutWindowState, AutoClearState, FontChoice,
-    LAUNCHER_HEIGHT, LAUNCHER_WIDTH, LauncherExitIntent, LauncherView, MENU_COMMAND_TX,
-    MenuCommand, NEURAL_STATUS, NeuralStatus, Palette, SelfClipboardWriteState, ThemeMode,
-    UiStyleState, palette_for,
+    ABOUT_WINDOW_HEIGHT, ABOUT_WINDOW_WIDTH, AboutWindowState, AutoClearState, LAUNCHER_HEIGHT,
+    LAUNCHER_WIDTH, LauncherExitIntent, LauncherView, MENU_COMMAND_TX, MenuCommand, NEURAL_STATUS,
+    NeuralStatus, Palette, SelfClipboardWriteState, UiStyleState, palette_for,
 };
 
 // ---------------------------------------------------------------------------
@@ -661,9 +660,6 @@ impl gpui::Global for StatusItemRegistration {}
 
 struct PastaTray {
     menu_tx: mpsc::Sender<MenuCommand>,
-    font_choice: FontChoice,
-    theme_mode: ThemeMode,
-    syntax_highlighting: bool,
     secret_auto_clear: bool,
     pasta_brain_enabled: bool,
     neural_status: NeuralStatus,
@@ -672,9 +668,6 @@ struct PastaTray {
 
 impl PastaTray {
     fn sync_from_app(&mut self, style: &UiStyleState, neural_status: NeuralStatus) {
-        self.font_choice = font_choice_from_family(&style.family);
-        self.theme_mode = style.theme_mode;
-        self.syntax_highlighting = style.syntax_highlighting;
         self.secret_auto_clear = style.secret_auto_clear;
         self.pasta_brain_enabled = style.pasta_brain_enabled;
         self.neural_status = neural_status;
@@ -717,7 +710,7 @@ impl Tray for PastaTray {
 
         items.push(
             StandardItem {
-                label: "Show Pasta".into(),
+                label: "Pasta".into(),
                 activate: Box::new(|tray: &mut Self| {
                     let _ = tray.menu_tx.send(MenuCommand::ShowLauncher);
                 }),
@@ -741,163 +734,70 @@ impl Tray for PastaTray {
 
         items.push(
             SubMenu {
-                label: "Font".into(),
-                submenu: FontChoice::ALL
-                    .into_iter()
-                    .map(|choice| {
-                        CheckmarkItem {
-                            label: choice.label().into(),
-                            checked: choice == self.font_choice,
-                            activate: Box::new(move |tray: &mut Self| {
-                                tray.font_choice = choice;
-                                let _ = tray.menu_tx.send(MenuCommand::SetFont(choice));
-                            }),
-                            ..Default::default()
-                        }
-                        .into()
-                    })
-                    .collect(),
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        items.push(
-            SubMenu {
-                label: "Theme".into(),
+                label: "Preferences".into(),
                 submenu: vec![
-                    CheckmarkItem {
-                        label: "System".into(),
-                        checked: self.theme_mode == ThemeMode::System,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.theme_mode = ThemeMode::System;
-                            let _ = tray
-                                .menu_tx
-                                .send(MenuCommand::SetThemeMode(ThemeMode::System));
-                        }),
+                    SubMenu {
+                        label: "Secret Auto-Clear".into(),
+                        submenu: vec![
+                            CheckmarkItem {
+                                label: "Enable (30s)".into(),
+                                checked: self.secret_auto_clear,
+                                activate: Box::new(|tray: &mut Self| {
+                                    tray.secret_auto_clear = true;
+                                    let _ =
+                                        tray.menu_tx.send(MenuCommand::SetSecretAutoClear(true));
+                                }),
+                                ..Default::default()
+                            }
+                            .into(),
+                            CheckmarkItem {
+                                label: "Disable".into(),
+                                checked: !self.secret_auto_clear,
+                                activate: Box::new(|tray: &mut Self| {
+                                    tray.secret_auto_clear = false;
+                                    let _ =
+                                        tray.menu_tx.send(MenuCommand::SetSecretAutoClear(false));
+                                }),
+                                ..Default::default()
+                            }
+                            .into(),
+                        ],
                         ..Default::default()
                     }
                     .into(),
-                    CheckmarkItem {
-                        label: "Light".into(),
-                        checked: self.theme_mode == ThemeMode::Light,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.theme_mode = ThemeMode::Light;
-                            let _ = tray
-                                .menu_tx
-                                .send(MenuCommand::SetThemeMode(ThemeMode::Light));
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                    CheckmarkItem {
-                        label: "Dark".into(),
-                        checked: self.theme_mode == ThemeMode::Dark,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.theme_mode = ThemeMode::Dark;
-                            let _ = tray
-                                .menu_tx
-                                .send(MenuCommand::SetThemeMode(ThemeMode::Dark));
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                ],
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        items.push(
-            SubMenu {
-                label: "Syntax Highlighting".into(),
-                submenu: vec![
-                    CheckmarkItem {
-                        label: "Enable".into(),
-                        checked: self.syntax_highlighting,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.syntax_highlighting = true;
-                            let _ = tray.menu_tx.send(MenuCommand::SetSyntaxHighlighting(true));
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                    CheckmarkItem {
-                        label: "Disable".into(),
-                        checked: !self.syntax_highlighting,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.syntax_highlighting = false;
-                            let _ = tray.menu_tx.send(MenuCommand::SetSyntaxHighlighting(false));
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                ],
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        items.push(
-            SubMenu {
-                label: "Secret Copy Auto-Clear".into(),
-                submenu: vec![
-                    CheckmarkItem {
-                        label: "Enable (30s)".into(),
-                        checked: self.secret_auto_clear,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.secret_auto_clear = true;
-                            let _ = tray.menu_tx.send(MenuCommand::SetSecretAutoClear(true));
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                    CheckmarkItem {
-                        label: "Disable".into(),
-                        checked: !self.secret_auto_clear,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.secret_auto_clear = false;
-                            let _ = tray.menu_tx.send(MenuCommand::SetSecretAutoClear(false));
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                ],
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        items.push(
-            SubMenu {
-                label: "Pasta Brain".into(),
-                submenu: vec![
-                    CheckmarkItem {
-                        label: "Enable".into(),
-                        checked: self.pasta_brain_enabled,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.pasta_brain_enabled = true;
-                            let _ = tray.menu_tx.send(MenuCommand::SetPastaBrain(true));
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                    CheckmarkItem {
-                        label: "Disable".into(),
-                        checked: !self.pasta_brain_enabled,
-                        activate: Box::new(|tray: &mut Self| {
-                            tray.pasta_brain_enabled = false;
-                            let _ = tray.menu_tx.send(MenuCommand::SetPastaBrain(false));
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                    MenuItem::Separator,
-                    StandardItem {
-                        label: neural_download_label(self.neural_status).into(),
-                        activate: Box::new(|tray: &mut Self| {
-                            let _ = tray.menu_tx.send(MenuCommand::DownloadBrain);
-                        }),
+                    SubMenu {
+                        label: "Pasta Brain".into(),
+                        submenu: vec![
+                            CheckmarkItem {
+                                label: "Enable".into(),
+                                checked: self.pasta_brain_enabled,
+                                activate: Box::new(|tray: &mut Self| {
+                                    tray.pasta_brain_enabled = true;
+                                    let _ = tray.menu_tx.send(MenuCommand::SetPastaBrain(true));
+                                }),
+                                ..Default::default()
+                            }
+                            .into(),
+                            CheckmarkItem {
+                                label: "Disable".into(),
+                                checked: !self.pasta_brain_enabled,
+                                activate: Box::new(|tray: &mut Self| {
+                                    tray.pasta_brain_enabled = false;
+                                    let _ = tray.menu_tx.send(MenuCommand::SetPastaBrain(false));
+                                }),
+                                ..Default::default()
+                            }
+                            .into(),
+                            MenuItem::Separator,
+                            StandardItem {
+                                label: neural_download_label(self.neural_status).into(),
+                                activate: Box::new(|tray: &mut Self| {
+                                    let _ = tray.menu_tx.send(MenuCommand::DownloadBrain);
+                                }),
+                                ..Default::default()
+                            }
+                            .into(),
+                        ],
                         ..Default::default()
                     }
                     .into(),
@@ -973,9 +873,6 @@ pub(crate) fn setup_status_item(cx: &mut App) {
 
     let tray = PastaTray {
         menu_tx,
-        font_choice: font_choice_from_family(&style.family),
-        theme_mode: style.theme_mode,
-        syntax_highlighting: style.syntax_highlighting,
         secret_auto_clear: style.secret_auto_clear,
         pasta_brain_enabled: style.pasta_brain_enabled,
         neural_status,
@@ -1022,15 +919,7 @@ pub(crate) fn update_launch_at_login_menu_state(cx: &App) {
 
 // The ksni tray rebuilds its menu from UiStyleState on every sync, so the
 // macOS-granular per-item updaters collapse to a single full refresh here.
-pub(crate) fn update_syntax_menu_state(cx: &App) {
-    update_brain_menu_state(cx);
-}
-
 pub(crate) fn update_secret_menu_state(cx: &App) {
-    update_brain_menu_state(cx);
-}
-
-pub(crate) fn update_font_menu_state(cx: &App) {
     update_brain_menu_state(cx);
 }
 
@@ -1042,11 +931,6 @@ pub(crate) fn menu_command_from_tag(tag: isize) -> Option<crate::MenuCommand> {
         MENU_TAG_SHOW => Some(MenuCommand::ShowLauncher),
         MENU_TAG_QUIT => Some(MenuCommand::QuitApp),
         MENU_TAG_ABOUT => Some(MenuCommand::ShowAbout),
-        MENU_TAG_THEME_SYSTEM => Some(MenuCommand::SetThemeMode(ThemeMode::System)),
-        MENU_TAG_THEME_LIGHT => Some(MenuCommand::SetThemeMode(ThemeMode::Light)),
-        MENU_TAG_THEME_DARK => Some(MenuCommand::SetThemeMode(ThemeMode::Dark)),
-        MENU_TAG_SYNTAX_ON => Some(MenuCommand::SetSyntaxHighlighting(true)),
-        MENU_TAG_SYNTAX_OFF => Some(MenuCommand::SetSyntaxHighlighting(false)),
         MENU_TAG_SECRET_CLEAR_ON => Some(MenuCommand::SetSecretAutoClear(true)),
         MENU_TAG_SECRET_CLEAR_OFF => Some(MenuCommand::SetSecretAutoClear(false)),
         MENU_TAG_BRAIN_ON => Some(MenuCommand::SetPastaBrain(true)),
@@ -1054,11 +938,6 @@ pub(crate) fn menu_command_from_tag(tag: isize) -> Option<crate::MenuCommand> {
         MENU_TAG_BRAIN_DOWNLOAD => Some(MenuCommand::DownloadBrain),
         MENU_TAG_CLEAR_HISTORY => Some(MenuCommand::RequestClearHistory),
         MENU_TAG_LAUNCH_AT_LOGIN => Some(MenuCommand::ToggleLaunchAtLogin),
-        t if t >= MENU_TAG_FONT_BASE && t < MENU_TAG_FONT_BASE + FontChoice::ALL.len() as isize => {
-            Some(MenuCommand::SetFont(
-                FontChoice::ALL[(t - MENU_TAG_FONT_BASE) as usize],
-            ))
-        }
         _ => None,
     }
 }
@@ -1079,19 +958,24 @@ fn ui_style_state_path() -> Option<PathBuf> {
     Some(directory.join("ui-style.json"))
 }
 
-fn default_ui_style_state(default_family: gpui::SharedString) -> UiStyleState {
+fn default_ui_style_state(
+    ui_font_family: gpui::SharedString,
+    content_font_family: gpui::SharedString,
+) -> UiStyleState {
     UiStyleState {
-        family: default_family,
+        ui_font_family,
+        content_font_family,
         surface_alpha: 1.00,
-        theme_mode: ThemeMode::System,
-        syntax_highlighting: true,
         secret_auto_clear: true,
         pasta_brain_enabled: false,
     }
 }
 
-fn load_ui_style_state(default_family: gpui::SharedString) -> UiStyleState {
-    let mut style = default_ui_style_state(default_family);
+fn load_ui_style_state(
+    ui_font_family: gpui::SharedString,
+    content_font_family: gpui::SharedString,
+) -> UiStyleState {
+    let mut style = default_ui_style_state(ui_font_family, content_font_family);
     let Some(path) = ui_style_state_path() else {
         return style;
     };
@@ -1113,13 +997,7 @@ fn load_ui_style_state(default_family: gpui::SharedString) -> UiStyleState {
         }
     };
 
-    let family = persisted.family.trim();
-    if !family.is_empty() {
-        style.family = family.to_owned().into();
-    }
     style.surface_alpha = persisted.surface_alpha.clamp(0.45, 1.0);
-    style.theme_mode = persisted.theme_mode;
-    style.syntax_highlighting = persisted.syntax_highlighting;
     style.secret_auto_clear = persisted.secret_auto_clear;
     style.pasta_brain_enabled = persisted.pasta_brain_enabled;
     style
@@ -1131,10 +1009,7 @@ fn save_ui_style_state(style: &UiStyleState) {
     };
 
     let serialized = match serde_json::to_string_pretty(&crate::PersistedUiStyleState {
-        family: style.family.to_string(),
         surface_alpha: style.surface_alpha.clamp(0.45, 1.0),
-        theme_mode: style.theme_mode,
-        syntax_highlighting: style.syntax_highlighting,
         secret_auto_clear: style.secret_auto_clear,
         pasta_brain_enabled: style.pasta_brain_enabled,
     }) {
@@ -1157,40 +1032,34 @@ pub(crate) fn persist_ui_style_state(cx: &App) {
 pub(crate) fn load_embedded_ui_font(cx: &mut App) {
     use std::borrow::Cow;
 
+    // Pasta is Geist-only by design: Geist Sans for UI chrome, Geist Mono for
+    // clipboard content. No other font is bundled or selectable.
     let font_blobs: Vec<Cow<'static, [u8]>> = vec![
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MesloLGSNF-Regular.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MesloLGSNF-Bold.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MesloLGSNF-Italic.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MesloLGSNF-BoldItalic.ttf").as_slice()),
-        Cow::Borrowed(
-            include_bytes!("../../../assets/fonts/IosevkaTermNerdFont-Light.ttf").as_slice(),
-        ),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/IBMPlexMono-Light.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/JetBrainsMono-Light.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/SourceCodePro-Var.ttf").as_slice()),
-        Cow::Borrowed(
-            include_bytes!("../../../assets/fonts/MonaspaceNeonFrozen-Light.ttf").as_slice(),
-        ),
+        Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Regular.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../../../assets/fonts/GeistMono-Regular.ttf").as_slice()),
     ];
 
     if let Err(err) = cx.text_system().add_fonts(font_blobs) {
         eprintln!("warning: unable to load embedded fonts: {err}");
     }
 
-    let default_family =
-        resolve_font_family(cx, FontChoice::MesloLg).unwrap_or_else(|| "Meslo LG".into());
-    cx.set_global(load_ui_style_state(default_family));
+    let ui_font_family =
+        resolve_font_family(cx, &["Geist"]).unwrap_or_else(|| "Geist".into());
+    let content_font_family = resolve_font_family(cx, &["Geist Mono", "GeistMono"])
+        .unwrap_or_else(|| "Geist Mono".into());
+    cx.set_global(load_ui_style_state(ui_font_family, content_font_family));
 }
 
-/// Resolve the user's font choice to an actual font family name.
-pub(crate) fn resolve_font_family(cx: &App, choice: FontChoice) -> Option<gpui::SharedString> {
+/// Resolve a bundled font's family name via best-effort matching against the
+/// text system's registered fonts.
+pub(crate) fn resolve_font_family(cx: &App, candidates: &[&str]) -> Option<gpui::SharedString> {
     let all_names = cx.text_system().all_font_names();
     let all_normalized: Vec<String> = all_names
         .iter()
         .map(|name| normalize_font_name(name))
         .collect();
 
-    for candidate in choice.candidates() {
+    for candidate in candidates {
         let candidate_normalized = normalize_font_name(candidate);
         if candidate_normalized.is_empty() {
             continue;
@@ -1205,7 +1074,7 @@ pub(crate) fn resolve_font_family(cx: &App, choice: FontChoice) -> Option<gpui::
         }
     }
 
-    for candidate in choice.candidates() {
+    for candidate in candidates {
         let candidate_normalized = normalize_font_name(candidate);
         if candidate_normalized.is_empty() {
             continue;
@@ -1227,23 +1096,6 @@ fn normalize_font_name(value: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .map(|ch| ch.to_ascii_lowercase())
         .collect()
-}
-
-/// Apply the current style state to an open window.
-pub(crate) fn apply_style_to_open_window(cx: &mut App) {
-    let style = cx.global::<UiStyleState>().clone();
-    if let Some(window) = cx
-        .try_global::<crate::app::LauncherState>()
-        .and_then(|state| state.window)
-    {
-        let _ = window.update(cx, |view, _window, cx| {
-            view.font_family = style.family.clone();
-            view.surface_alpha = style.surface_alpha;
-            view.theme_mode = style.theme_mode;
-            view.syntax_highlighting = style.syntax_highlighting;
-            cx.notify();
-        });
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1359,10 +1211,9 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
             cx.new(move |cx| {
                 let view = LauncherView::new(
                     storage,
-                    style.family.clone(),
+                    style.ui_font_family.clone(),
+                    style.content_font_family.clone(),
                     style.surface_alpha,
-                    style.theme_mode,
-                    style.syntax_highlighting,
                     style.pasta_brain_enabled,
                     search_tx,
                     generation_token,
@@ -1426,22 +1277,19 @@ pub(crate) struct AboutView;
 impl gpui::Render for AboutView {
     fn render(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         use gpui::*;
 
         let style = cx.global::<UiStyleState>().clone();
-        let palette = palette_for(
-            style.theme_mode.apply(window.appearance()),
-            style.surface_alpha,
-        );
+        let palette = palette_for(style.surface_alpha);
         let version = env!("CARGO_PKG_VERSION");
 
         div()
             .size_full()
             .bg(palette.window_bg)
-            .font_family(style.family.clone())
+            .font_family(style.ui_font_family.clone())
             .font_weight(FontWeight::NORMAL)
             .flex()
             .flex_col()
@@ -1891,24 +1739,10 @@ fn clipboard_looks_transient(mime_types: &[String]) -> bool {
     })
 }
 
-fn font_choice_from_family(family: &str) -> FontChoice {
-    for choice in FontChoice::ALL {
-        if choice
-            .candidates()
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(family))
-            || choice.label().eq_ignore_ascii_case(family)
-        {
-            return choice;
-        }
-    }
-    FontChoice::MesloLg
-}
-
 fn neural_download_label(status: NeuralStatus) -> &'static str {
     match status {
         NeuralStatus::Loading => "Downloading Model...",
-        NeuralStatus::Ready => "Model Ready ✓",
+        NeuralStatus::Ready => "Model Ready",
         NeuralStatus::Failed => "Download Model (Retry)",
     }
 }

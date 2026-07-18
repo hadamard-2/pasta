@@ -15,17 +15,11 @@ pub(crate) struct StatusItemRegistration {
     pub(crate) _status_item: StrongPtr,
     pub(crate) _menu: StrongPtr,
     pub(crate) _handler: StrongPtr,
-    pub(crate) theme_system_item: StrongPtr,
-    pub(crate) theme_light_item: StrongPtr,
-    pub(crate) theme_dark_item: StrongPtr,
-    pub(crate) syntax_on_item: StrongPtr,
-    pub(crate) syntax_off_item: StrongPtr,
     pub(crate) secret_on_item: StrongPtr,
     pub(crate) secret_off_item: StrongPtr,
     pub(crate) brain_on_item: StrongPtr,
     pub(crate) brain_off_item: StrongPtr,
     pub(crate) brain_download_item: StrongPtr,
-    pub(crate) font_menu: StrongPtr,
     pub(crate) launch_at_login_item: StrongPtr,
 }
 
@@ -126,30 +120,6 @@ fn handle_menu_command(command: MenuCommand, cx: &mut App) {
                 cx.quit();
             }
         }
-        MenuCommand::SetFont(choice) => {
-            if let Some(family) = resolve_font_family(cx, choice) {
-                cx.global_mut::<UiStyleState>().family = family;
-                apply_style_to_open_window(cx);
-                persist_ui_style_state(cx);
-                update_brain_menu_state(cx);
-            } else {
-                let fallback = choice
-                    .candidates()
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| choice.label());
-                cx.global_mut::<UiStyleState>().family = fallback.into();
-                apply_style_to_open_window(cx);
-                persist_ui_style_state(cx);
-                eprintln!(
-                    "warning: requested font '{}' not resolved via text system; using fallback '{}'",
-                    choice.label(),
-                    fallback
-                );
-                update_brain_menu_state(cx);
-            }
-            update_font_menu_state(cx);
-        }
         MenuCommand::ShowAbout => {
             #[cfg(target_os = "macos")]
             {
@@ -182,18 +152,6 @@ fn handle_menu_command(command: MenuCommand, cx: &mut App) {
                 show_about_window(cx);
             }
         }
-        MenuCommand::SetThemeMode(theme_mode) => {
-            cx.global_mut::<UiStyleState>().theme_mode = theme_mode;
-            apply_style_to_open_window(cx);
-            persist_ui_style_state(cx);
-            update_brain_menu_state(cx);
-        }
-        MenuCommand::SetSyntaxHighlighting(enabled) => {
-            cx.global_mut::<UiStyleState>().syntax_highlighting = enabled;
-            apply_style_to_open_window(cx);
-            persist_ui_style_state(cx);
-            update_syntax_menu_state(cx);
-        }
         MenuCommand::SetSecretAutoClear(enabled) => {
             cx.global_mut::<UiStyleState>().secret_auto_clear = enabled;
             persist_ui_style_state(cx);
@@ -213,6 +171,9 @@ fn handle_menu_command(command: MenuCommand, cx: &mut App) {
         MenuCommand::DownloadBrain => {
             let storage = cx.global::<StorageState>().storage.clone();
             spawn_neural_init(storage);
+            update_brain_menu_state(cx);
+        }
+        MenuCommand::NeuralStatusChanged => {
             update_brain_menu_state(cx);
         }
         MenuCommand::RequestClearHistory => {
@@ -359,7 +320,6 @@ pub(crate) fn spawn_launcher_transition_loop(cx: &mut App) {
                     .and_then(|state| state.window)
                 {
                     let _ = window.update(cx, |view, window, cx| {
-                        let appearance_changed = view.sync_window_appearance(window);
                         let reveal_changed = view.clear_expired_secret_reveal();
                         let reveal_tick_changed = view.secret_countdown_tick_changed();
                         let caret_blink_changed =
@@ -367,11 +327,7 @@ pub(crate) fn spawn_launcher_transition_loop(cx: &mut App) {
                         let transition_active = view.transition_running();
 
                         if !transition_active {
-                            if appearance_changed
-                                || reveal_changed
-                                || reveal_tick_changed
-                                || caret_blink_changed
-                            {
+                            if reveal_changed || reveal_tick_changed || caret_blink_changed {
                                 cx.notify();
                             }
                             return;
@@ -433,10 +389,7 @@ pub(crate) fn show_launcher(cx: &mut App) {
 
     if window
         .update(cx, |view, window, cx| {
-            view.font_family = style.family.clone();
             view.surface_alpha = style.surface_alpha;
-            view.theme_mode = style.theme_mode;
-            view.syntax_highlighting = style.syntax_highlighting;
             view.pasta_brain_enabled = style.pasta_brain_enabled;
             view.reset_for_show();
             window.resize(size(px(LAUNCHER_WIDTH), px(LAUNCHER_HEIGHT)));
@@ -451,10 +404,7 @@ pub(crate) fn show_launcher(cx: &mut App) {
     {
         cx.global_mut::<LauncherState>().window = Some(created);
         let _ = created.update(cx, |view, window, cx| {
-            view.font_family = style.family.clone();
             view.surface_alpha = style.surface_alpha;
-            view.theme_mode = style.theme_mode;
-            view.syntax_highlighting = style.syntax_highlighting;
             view.pasta_brain_enabled = style.pasta_brain_enabled;
             view.reset_for_show();
             window.resize(size(px(LAUNCHER_WIDTH), px(LAUNCHER_HEIGHT)));

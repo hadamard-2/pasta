@@ -17,10 +17,9 @@ const SEARCH_NEURAL_MIN_QUERY_CHARS: usize = 5;
 impl LauncherView {
     pub(crate) fn new(
         storage: Arc<ClipboardStorage>,
-        font_family: SharedString,
+        ui_font_family: SharedString,
+        content_font_family: SharedString,
         surface_alpha: f32,
-        theme_mode: ThemeMode,
-        syntax_highlighting: bool,
         pasta_brain_enabled: bool,
         search_request_tx: mpsc::Sender<SearchRequest>,
         search_generation_token: Arc<std::sync::atomic::AtomicU64>,
@@ -28,10 +27,9 @@ impl LauncherView {
     ) -> Self {
         let mut view = Self {
             storage,
-            font_family,
+            ui_font_family,
+            content_font_family,
             surface_alpha,
-            theme_mode,
-            syntax_highlighting,
             pasta_brain_enabled,
             query_input_state: TextInputState::new(cx),
             info_editor_input_state: TextInputState::new(cx),
@@ -90,7 +88,6 @@ impl LauncherView {
             suppress_auto_hide: false,
             suppress_auto_hide_until: None,
             show_command_help: false,
-            last_window_appearance: None,
             caret_visible: true,
             caret_blink_due_at: Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS),
         };
@@ -146,7 +143,6 @@ impl LauncherView {
         self.suppress_auto_hide = false;
         self.suppress_auto_hide_until = None;
         self.show_command_help = false;
-        self.last_window_appearance = None;
         self.begin_search_generation();
         self.request_search(SearchExecution::Fast);
     }
@@ -280,15 +276,6 @@ impl LauncherView {
             });
         })
         .detach();
-    }
-
-    pub(crate) fn sync_window_appearance(&mut self, window: &Window) -> bool {
-        let appearance = window.appearance();
-        if self.last_window_appearance == Some(appearance) {
-            return false;
-        }
-        self.last_window_appearance = Some(appearance);
-        true
     }
 
     pub(crate) fn begin_open_transition(&mut self) {

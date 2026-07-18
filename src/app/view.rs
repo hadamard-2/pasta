@@ -10,10 +10,7 @@ use gpui::{AnyElement, StatefulInteractiveElement, canvas, hsla, size};
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_pending_text_input_focus(window);
-        let palette = palette_for(
-            self.theme_mode.apply(window.appearance()),
-            self.surface_alpha,
-        );
+        let palette = palette_for(self.surface_alpha);
         let info_editor_open = self.info_editor_target_id.is_some();
         let tag_editor_open = self.tag_editor_target_id.is_some();
         let bowl_editor_open = self.bowl_editor_target_id.is_some();
@@ -72,7 +69,7 @@ impl Render for LauncherView {
 
         let mut panel = div()
             .size_full()
-            .font_family(self.font_family.clone())
+            .font_family(self.ui_font_family.clone())
             .font_weight(FontWeight::LIGHT)
             .opacity(self.transition_alpha)
             .bg(palette.window_bg)
@@ -1572,8 +1569,8 @@ impl LauncherView {
             row_data.collapsed_preview.clone()
         };
         let created_detail = format_timestamp_detail(&item.created_at);
-        let preview_syntax_enabled = self.syntax_highlighting
-            && self.query.trim().is_empty()
+        // Syntax highlighting is always on; Pasta no longer exposes a toggle for it.
+        let preview_syntax_enabled = self.query.trim().is_empty()
             && !is_masked_secret
             && !qr_overlay_active
             && preview_settled
@@ -1687,14 +1684,19 @@ impl LauncherView {
                     .flex_1()
                     .overflow_y_scroll()
                     .pr_2()
-                    .child(div().w_full().text_sm().text_color(palette.row_text).child(
-                        syntax_styled_text(
-                            &preview_text,
-                            preview_language,
-                            preview_syntax_enabled,
-                            palette.dark,
-                        ),
-                    )),
+                    .child(
+                        div()
+                            .w_full()
+                            .text_sm()
+                            .text_color(palette.row_text)
+                            .font_family(self.content_font_family.clone())
+                            .child(syntax_styled_text(
+                                &preview_text,
+                                preview_language,
+                                preview_syntax_enabled,
+                                palette.dark,
+                            )),
+                    ),
             )
             .into_any_element()
         }

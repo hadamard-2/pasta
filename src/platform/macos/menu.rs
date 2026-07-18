@@ -51,36 +51,8 @@ pub(crate) fn menu_command_from_tag(tag: isize) -> Option<MenuCommand> {
         return Some(MenuCommand::QuitApp);
     }
 
-    if (MENU_TAG_FONT_BASE..MENU_TAG_FONT_BASE + FontChoice::ALL.len() as isize).contains(&tag) {
-        let index = (tag - MENU_TAG_FONT_BASE) as usize;
-        return FontChoice::ALL
-            .get(index)
-            .copied()
-            .map(MenuCommand::SetFont);
-    }
-
     if tag == MENU_TAG_ABOUT {
         return Some(MenuCommand::ShowAbout);
-    }
-
-    if tag == MENU_TAG_THEME_SYSTEM {
-        return Some(MenuCommand::SetThemeMode(ThemeMode::System));
-    }
-
-    if tag == MENU_TAG_THEME_LIGHT {
-        return Some(MenuCommand::SetThemeMode(ThemeMode::Light));
-    }
-
-    if tag == MENU_TAG_THEME_DARK {
-        return Some(MenuCommand::SetThemeMode(ThemeMode::Dark));
-    }
-
-    if tag == MENU_TAG_SYNTAX_ON {
-        return Some(MenuCommand::SetSyntaxHighlighting(true));
-    }
-
-    if tag == MENU_TAG_SYNTAX_OFF {
-        return Some(MenuCommand::SetSyntaxHighlighting(false));
     }
 
     if tag == MENU_TAG_SECRET_CLEAR_ON {
@@ -169,82 +141,8 @@ pub(crate) fn setup_status_item(cx: &mut App) {
 
         menu.addItem_(NSMenuItem::separatorItem(nil));
 
-        let font_parent = menu_item("Font", "", handler, selector("menuAction:"), -1);
-        let font_menu = NSMenu::new(nil);
-        let current_family = &cx.global::<UiStyleState>().family;
-        for (ix, choice) in FontChoice::ALL.into_iter().enumerate() {
-            let tag = MENU_TAG_FONT_BASE + ix as isize;
-            let item = menu_item(choice.label(), "", handler, selector("menuAction:"), tag);
-            let is_active = choice.matches_family(current_family);
-            let _: () = msg_send![item, setState: if is_active { 1_isize } else { 0_isize }];
-            font_menu.addItem_(item);
-        }
-        font_parent.setSubmenu_(font_menu);
-        menu.addItem_(font_parent);
-
-        let theme_parent = menu_item("Theme", "", handler, selector("menuAction:"), -1);
-        let theme_menu = NSMenu::new(nil);
-        let theme_system = menu_item(
-            "System",
-            "",
-            handler,
-            selector("menuAction:"),
-            MENU_TAG_THEME_SYSTEM,
-        );
-        let theme_light = menu_item(
-            "Light",
-            "",
-            handler,
-            selector("menuAction:"),
-            MENU_TAG_THEME_LIGHT,
-        );
-        let theme_dark = menu_item(
-            "Dark",
-            "",
-            handler,
-            selector("menuAction:"),
-            MENU_TAG_THEME_DARK,
-        );
-        theme_menu.addItem_(theme_system);
-        theme_menu.addItem_(theme_light);
-        theme_menu.addItem_(theme_dark);
-        theme_parent.setSubmenu_(theme_menu);
-        menu.addItem_(theme_parent);
-
-        let syntax_parent = menu_item(
-            "Syntax Highlighting",
-            "",
-            handler,
-            selector("menuAction:"),
-            -1,
-        );
-        let syntax_menu = NSMenu::new(nil);
-        let syntax_on = menu_item(
-            "Enable",
-            "",
-            handler,
-            selector("menuAction:"),
-            MENU_TAG_SYNTAX_ON,
-        );
-        let syntax_off = menu_item(
-            "Disable",
-            "",
-            handler,
-            selector("menuAction:"),
-            MENU_TAG_SYNTAX_OFF,
-        );
-        // Set initial checkmark state for syntax highlighting
-        let syntax_enabled = cx.global::<UiStyleState>().syntax_highlighting;
-        let _: () = msg_send![syntax_on, setState: if syntax_enabled { 1_isize } else { 0_isize }];
-        let _: () = msg_send![syntax_off, setState: if syntax_enabled { 0_isize } else { 1_isize }];
-
-        syntax_menu.addItem_(syntax_on);
-        syntax_menu.addItem_(syntax_off);
-        syntax_parent.setSubmenu_(syntax_menu);
-        menu.addItem_(syntax_parent);
-
         let secret_parent = menu_item(
-            "Secret Copy Auto-Clear",
+            "Secret Auto-Clear",
             "",
             handler,
             selector("menuAction:"),
@@ -302,23 +200,7 @@ pub(crate) fn setup_status_item(cx: &mut App) {
 
         let style = cx.global::<UiStyleState>();
         let brain_enabled = style.pasta_brain_enabled;
-        let syntax_enabled = style.syntax_highlighting;
         let secret_enabled = style.secret_auto_clear;
-        let theme_mode = style.theme_mode;
-        let _: () = msg_send![
-            theme_system,
-            setState: if theme_mode == ThemeMode::System { 1_isize } else { 0_isize }
-        ];
-        let _: () = msg_send![
-            theme_light,
-            setState: if theme_mode == ThemeMode::Light { 1_isize } else { 0_isize }
-        ];
-        let _: () = msg_send![
-            theme_dark,
-            setState: if theme_mode == ThemeMode::Dark { 1_isize } else { 0_isize }
-        ];
-        let _: () = msg_send![syntax_on, setState: if syntax_enabled { 1_isize } else { 0_isize }];
-        let _: () = msg_send![syntax_off, setState: if syntax_enabled { 0_isize } else { 1_isize }];
         let _: () = msg_send![secret_on, setState: if secret_enabled { 1_isize } else { 0_isize }];
         let _: () = msg_send![secret_off, setState: if secret_enabled { 0_isize } else { 1_isize }];
         let _: () = msg_send![brain_on, setState: if brain_enabled { 1_isize } else { 0_isize }];
@@ -375,17 +257,11 @@ pub(crate) fn setup_status_item(cx: &mut App) {
             _status_item: StrongPtr::retain(status_item as id),
             _menu: StrongPtr::retain(menu as id),
             _handler: StrongPtr::retain(handler as id),
-            theme_system_item: StrongPtr::retain(theme_system as id),
-            theme_light_item: StrongPtr::retain(theme_light as id),
-            theme_dark_item: StrongPtr::retain(theme_dark as id),
-            syntax_on_item: StrongPtr::retain(syntax_on as id),
-            syntax_off_item: StrongPtr::retain(syntax_off as id),
             secret_on_item: StrongPtr::retain(secret_on as id),
             secret_off_item: StrongPtr::retain(secret_off as id),
             brain_on_item: StrongPtr::retain(brain_on as id),
             brain_off_item: StrongPtr::retain(brain_off as id),
             brain_download_item: StrongPtr::retain(brain_download as id),
-            font_menu: StrongPtr::retain(font_menu as id),
             launch_at_login_item: StrongPtr::retain(launch_at_login_item as id),
         });
     }
@@ -404,31 +280,9 @@ pub(crate) fn update_launch_at_login_menu_state(cx: &App) {
 pub(crate) fn update_brain_menu_state(cx: &App) {
     let style = cx.global::<UiStyleState>();
     let reg = cx.global::<StatusItemRegistration>();
-    let theme_mode = style.theme_mode;
-    let syntax_enabled = style.syntax_highlighting;
     let secret_enabled = style.secret_auto_clear;
     let brain_enabled = style.pasta_brain_enabled;
     unsafe {
-        let _: () = msg_send![
-            *reg.theme_system_item,
-            setState: if theme_mode == ThemeMode::System { 1_isize } else { 0_isize }
-        ];
-        let _: () = msg_send![
-            *reg.theme_light_item,
-            setState: if theme_mode == ThemeMode::Light { 1_isize } else { 0_isize }
-        ];
-        let _: () = msg_send![
-            *reg.theme_dark_item,
-            setState: if theme_mode == ThemeMode::Dark { 1_isize } else { 0_isize }
-        ];
-        let _: () = msg_send![
-            *reg.syntax_on_item,
-            setState: if syntax_enabled { 1_isize } else { 0_isize }
-        ];
-        let _: () = msg_send![
-            *reg.syntax_off_item,
-            setState: if syntax_enabled { 0_isize } else { 1_isize }
-        ];
         let _: () = msg_send![
             *reg.secret_on_item,
             setState: if secret_enabled { 1_isize } else { 0_isize }
@@ -449,7 +303,7 @@ pub(crate) fn update_brain_menu_state(cx: &App) {
             .unwrap_or(NeuralStatus::Failed);
         let download_title = match neural_status {
             NeuralStatus::Loading => "Downloading Model...",
-            NeuralStatus::Ready => "Model Ready ✓",
+            NeuralStatus::Ready => "Model Ready",
             NeuralStatus::Failed => "Download Model (Retry)",
         };
         let title = NSString::alloc(nil).init_str(download_title);
@@ -466,32 +320,5 @@ pub(crate) fn update_secret_menu_state(cx: &App) {
             msg_send![*reg.secret_on_item, setState: if enabled { 1_isize } else { 0_isize }];
         let _: () =
             msg_send![*reg.secret_off_item, setState: if enabled { 0_isize } else { 1_isize }];
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn update_syntax_menu_state(cx: &App) {
-    let enabled = cx.global::<UiStyleState>().syntax_highlighting;
-    let reg = cx.global::<StatusItemRegistration>();
-    unsafe {
-        let _: () =
-            msg_send![*reg.syntax_on_item, setState: if enabled { 1_isize } else { 0_isize }];
-        let _: () =
-            msg_send![*reg.syntax_off_item, setState: if enabled { 0_isize } else { 1_isize }];
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn update_font_menu_state(cx: &App) {
-    let current_family = &cx.global::<UiStyleState>().family;
-    let reg = cx.global::<StatusItemRegistration>();
-    unsafe {
-        let count: isize = msg_send![*reg.font_menu, numberOfItems];
-        for i in 0..count {
-            let item: id = msg_send![*reg.font_menu, itemAtIndex: i];
-            let choice = FontChoice::ALL[i as usize];
-            let is_active = choice.matches_family(current_family);
-            let _: () = msg_send![item, setState: if is_active { 1_isize } else { 0_isize }];
-        }
     }
 }

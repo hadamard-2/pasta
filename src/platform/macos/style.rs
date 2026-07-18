@@ -15,20 +15,25 @@ fn ui_style_state_path() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn default_ui_style_state(default_family: SharedString) -> UiStyleState {
+fn default_ui_style_state(
+    ui_font_family: SharedString,
+    content_font_family: SharedString,
+) -> UiStyleState {
     UiStyleState {
-        family: default_family,
+        ui_font_family,
+        content_font_family,
         surface_alpha: 1.00,
-        theme_mode: ThemeMode::System,
-        syntax_highlighting: true,
         secret_auto_clear: true,
         pasta_brain_enabled: false,
     }
 }
 
 #[cfg(target_os = "macos")]
-fn load_ui_style_state(default_family: SharedString) -> UiStyleState {
-    let mut style = default_ui_style_state(default_family);
+fn load_ui_style_state(
+    ui_font_family: SharedString,
+    content_font_family: SharedString,
+) -> UiStyleState {
+    let mut style = default_ui_style_state(ui_font_family, content_font_family);
     let Some(path) = ui_style_state_path() else {
         return style;
     };
@@ -50,13 +55,7 @@ fn load_ui_style_state(default_family: SharedString) -> UiStyleState {
         }
     };
 
-    let family = persisted.family.trim();
-    if !family.is_empty() {
-        style.family = family.to_owned().into();
-    }
     style.surface_alpha = persisted.surface_alpha.clamp(0.45, 1.0);
-    style.theme_mode = persisted.theme_mode;
-    style.syntax_highlighting = persisted.syntax_highlighting;
     style.secret_auto_clear = persisted.secret_auto_clear;
     style.pasta_brain_enabled = persisted.pasta_brain_enabled;
     style
@@ -69,10 +68,7 @@ fn save_ui_style_state(style: &UiStyleState) {
     };
 
     let serialized = match serde_json::to_string_pretty(&PersistedUiStyleState {
-        family: style.family.to_string(),
         surface_alpha: style.surface_alpha.clamp(0.45, 1.0),
-        theme_mode: style.theme_mode,
-        syntax_highlighting: style.syntax_highlighting,
         secret_auto_clear: style.secret_auto_clear,
         pasta_brain_enabled: style.pasta_brain_enabled,
     }) {
@@ -95,40 +91,35 @@ pub(crate) fn persist_ui_style_state(cx: &App) {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn load_embedded_ui_font(cx: &mut App) {
+    // Pasta is Geist-only by design: Geist Sans for UI chrome, Geist Mono for
+    // clipboard content. No other font is bundled or selectable.
     let font_blobs: Vec<Cow<'static, [u8]>> = vec![
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MesloLGSNF-Regular.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MesloLGSNF-Bold.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MesloLGSNF-Italic.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MesloLGSNF-BoldItalic.ttf").as_slice()),
-        Cow::Borrowed(
-            include_bytes!("../../../assets/fonts/IosevkaTermNerdFont-Light.ttf").as_slice(),
-        ),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/IBMPlexMono-Light.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/JetBrainsMono-Light.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/SourceCodePro-Var.ttf").as_slice()),
-        Cow::Borrowed(
-            include_bytes!("../../../assets/fonts/MonaspaceNeonFrozen-Light.ttf").as_slice(),
-        ),
+        Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Regular.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../../../assets/fonts/GeistMono-Regular.ttf").as_slice()),
     ];
 
     if let Err(err) = cx.text_system().add_fonts(font_blobs) {
-        eprintln!("warning: unable to load embedded Meslo font: {err}");
+        eprintln!("warning: unable to load embedded fonts: {err}");
     }
 
-    let default_family =
-        resolve_font_family(cx, FontChoice::MesloLg).unwrap_or_else(|| "Menlo".into());
-    cx.set_global(load_ui_style_state(default_family));
+    let ui_font_family =
+        resolve_font_family(cx, &["Geist"]).unwrap_or_else(|| "Geist".into());
+    let content_font_family = resolve_font_family(cx, &["Geist Mono", "GeistMono"])
+        .unwrap_or_else(|| "Geist Mono".into());
+    cx.set_global(load_ui_style_state(ui_font_family, content_font_family));
 }
 
+/// Resolve a bundled font's family name via best-effort matching against the
+/// text system's registered fonts.
 #[cfg(target_os = "macos")]
-pub(crate) fn resolve_font_family(cx: &App, choice: FontChoice) -> Option<SharedString> {
+pub(crate) fn resolve_font_family(cx: &App, candidates: &[&str]) -> Option<SharedString> {
     let all_names = cx.text_system().all_font_names();
     let all_normalized: Vec<String> = all_names
         .iter()
         .map(|name| normalize_font_name(name))
         .collect();
 
-    for candidate in choice.candidates() {
+    for candidate in candidates {
         let candidate_normalized = normalize_font_name(candidate);
         if candidate_normalized.is_empty() {
             continue;
@@ -143,7 +134,7 @@ pub(crate) fn resolve_font_family(cx: &App, choice: FontChoice) -> Option<Shared
         }
     }
 
-    for candidate in choice.candidates() {
+    for candidate in candidates {
         let candidate_normalized = normalize_font_name(candidate);
         if candidate_normalized.is_empty() {
             continue;
@@ -166,22 +157,4 @@ fn normalize_font_name(value: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .map(|ch| ch.to_ascii_lowercase())
         .collect()
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn apply_style_to_open_window(cx: &mut App) {
-    let style = cx.global::<UiStyleState>().clone();
-    if let Some(window) = cx
-        .try_global::<LauncherState>()
-        .and_then(|state| state.window)
-    {
-        let _ = window.update(cx, |view, window, cx| {
-            view.font_family = style.family.clone();
-            view.surface_alpha = style.surface_alpha;
-            view.theme_mode = style.theme_mode;
-            view.syntax_highlighting = style.syntax_highlighting;
-            crate::platform::macos::window::apply_window_foggy_theme(window, style.theme_mode);
-            cx.notify();
-        });
-    }
 }

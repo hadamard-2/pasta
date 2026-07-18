@@ -6,7 +6,7 @@ use crate::*;
 // picks the right tint, plus translucency and shadow. The actual backdrop is
 // owned by GPUI — we deliberately do not touch the content-view hierarchy here.
 #[cfg(target_os = "macos")]
-pub(crate) fn apply_window_foggy_theme(window: &Window, theme_mode: ThemeMode) {
+pub(crate) fn apply_window_foggy_theme(window: &Window) {
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return;
     };
@@ -25,17 +25,9 @@ pub(crate) fn apply_window_foggy_theme(window: &Window, theme_mode: ThemeMode) {
             return;
         }
 
-        let appearance_name = match theme_mode {
-            ThemeMode::System => nil,
-            ThemeMode::Light => NSString::alloc(nil).init_str("NSAppearanceNameVibrantLight"),
-            ThemeMode::Dark => NSString::alloc(nil).init_str("NSAppearanceNameVibrantDark"),
-        };
-
-        let appearance: id = if appearance_name == nil {
-            nil
-        } else {
-            msg_send![class!(NSAppearance), appearanceNamed: appearance_name]
-        };
+        // Pasta is dark-only by design; there is no light/system mode to pick between.
+        let appearance_name = NSString::alloc(nil).init_str("NSAppearanceNameVibrantDark");
+        let appearance: id = msg_send![class!(NSAppearance), appearanceNamed: appearance_name];
         let _: () = msg_send![ns_window, setAppearance: appearance];
         let _: () = msg_send![ns_window, setOpaque: false];
         let _: () = msg_send![ns_window, setHasShadow: true];
@@ -117,7 +109,7 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
             let search_request_tx = search_request_tx.clone();
             let search_generation_token = search_generation_token.clone();
             set_window_move_to_active_space(window);
-            apply_window_foggy_theme(window, style.theme_mode);
+            apply_window_foggy_theme(window);
             window.on_window_should_close(cx, |_, cx| {
                 cx.hide();
                 false
@@ -126,10 +118,9 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
             cx.new(move |cx| {
                 let view = LauncherView::new(
                     storage.clone(),
-                    style.family.clone(),
+                    style.ui_font_family.clone(),
+                    style.content_font_family.clone(),
                     style.surface_alpha,
-                    style.theme_mode,
-                    style.syntax_highlighting,
                     style.pasta_brain_enabled,
                     search_request_tx,
                     search_generation_token,

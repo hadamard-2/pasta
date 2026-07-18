@@ -21,53 +21,28 @@ pub(crate) struct Palette {
     pub(crate) keycap_text: gpui::Rgba,
 }
 
-pub(crate) fn palette_for(appearance: WindowAppearance, surface_alpha: f32) -> Palette {
-    let dark = matches!(
-        appearance,
-        WindowAppearance::Dark | WindowAppearance::VibrantDark
-    );
-
+pub(crate) fn palette_for(surface_alpha: f32) -> Palette {
     // A neutral, near-zero-chroma grayscale ladder. The window surface is opaque
     // by default (blur is unavailable on GNOME); the border plus shadow separate
     // it from the desktop. surface_alpha still scales the surfaces below 1.0.
-    let mut palette = if dark {
-        Palette {
-            dark,
-            window_bg: rgba(0x17171Aff),
-            window_border: rgba(0x2C2C30ff),
-            title_text: rgba(0xEDEDEFff),
-            query_placeholder: rgba(0x6E6E73ff),
-            query_active: rgba(0xF5F5F7ff),
-            muted_text: rgba(0x8A8A8Fff),
-            list_divider: rgba(0x262629ff),
-            row_text: rgba(0xEDEDEFff),
-            row_meta_text: rgba(0x8A8A8Fff),
-            row_hover_bg: rgba(0xFFFFFF0A),
-            selected_bg: rgba(0x2A2A2Eff),
-            selected_border: rgba(0x00000000),
-            action_bar_bg: rgba(0x1C1C1Fff),
-            keycap_bg: rgba(0x2A2A2Eff),
-            keycap_text: rgba(0x8A8A8Fff),
-        }
-    } else {
-        Palette {
-            dark,
-            window_bg: rgba(0xFFFFFFff),
-            window_border: rgba(0x00000014),
-            title_text: rgba(0x1D1D1Fff),
-            query_placeholder: rgba(0x8E8E93ff),
-            query_active: rgba(0x000000ff),
-            muted_text: rgba(0x8E8E93ff),
-            list_divider: rgba(0x0000000D),
-            row_text: rgba(0x1D1D1Fff),
-            row_meta_text: rgba(0x8E8E93ff),
-            row_hover_bg: rgba(0x00000008),
-            selected_bg: rgba(0x00000010),
-            selected_border: rgba(0x00000000),
-            action_bar_bg: rgba(0xF5F5F5ff),
-            keycap_bg: rgba(0x0000000D),
-            keycap_text: rgba(0x8E8E93ff),
-        }
+    // Pasta is dark-only by design; there is no light-mode branch to pick between.
+    let mut palette = Palette {
+        dark: true,
+        window_bg: rgba(0x17171Aff),
+        window_border: rgba(0x2C2C30ff),
+        title_text: rgba(0xEDEDEFff),
+        query_placeholder: rgba(0x6E6E73ff),
+        query_active: rgba(0xF5F5F7ff),
+        muted_text: rgba(0x8A8A8Fff),
+        list_divider: rgba(0x262629ff),
+        row_text: rgba(0xEDEDEFff),
+        row_meta_text: rgba(0x8A8A8Fff),
+        row_hover_bg: rgba(0xFFFFFF0A),
+        selected_bg: rgba(0x2A2A2Eff),
+        selected_border: rgba(0x00000000),
+        action_bar_bg: rgba(0x1C1C1Fff),
+        keycap_bg: rgba(0x2A2A2Eff),
+        keycap_text: rgba(0x8A8A8Fff),
     };
 
     // Scale window surface elements by the fixed alpha factor.
