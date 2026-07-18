@@ -81,3 +81,27 @@ pub(crate) fn format_timestamp_detail(timestamp: &str) -> String {
         })
         .unwrap_or_else(|_| timestamp.to_owned())
 }
+
+pub(crate) fn format_byte_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    if unit_index == 0 {
+        format!("{bytes} {}", UNITS[unit_index])
+    } else {
+        format!("{size:.1} {}", UNITS[unit_index])
+    }
+}
+
+pub(crate) fn format_image_metadata(image: &ImageAttachment) -> String {
+    format!(
+        "{}×{} · {}",
+        image.width,
+        image.height,
+        format_byte_size(image.byte_size)
+    )
+}

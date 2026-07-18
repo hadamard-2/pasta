@@ -4389,6 +4389,7 @@ dependencies = [
  "global-hotkey",
  "gpui",
  "hotkey-listener",
+ "image",
  "keyring",
  "ksni",
  "nix 0.23.2",

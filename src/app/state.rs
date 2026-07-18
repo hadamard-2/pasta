@@ -70,6 +70,22 @@ pub(crate) struct CachedRowPresentation {
 
 impl CachedRowPresentation {
     pub(crate) fn from_record(item: &ClipboardRecord) -> Self {
+        if let Some(image) = &item.image {
+            // Image attachments have no meaningful text body — skip the
+            // language/preview/title machinery built for text content.
+            let metadata = format_image_metadata(image);
+            return Self {
+                title: metadata.clone(),
+                created_label: format_timestamp(&item.created_at),
+                detected_language: None,
+                collapsed_preview: metadata.clone(),
+                expanded_preview: metadata,
+                expanded_preview_line_count: 1,
+                expanded_preview_truncated: false,
+                masked_preview: String::new(),
+            };
+        }
+
         let detected_language = detect_language(item.item_type, &item.content);
 
         let expanded_preview_full = expanded_preview_content(&item.content);

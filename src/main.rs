@@ -34,14 +34,15 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
 };
 use gpui::{
-    App, Application, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle,
+    App, Application, Bounds, ClickEvent, ClipboardEntry, ClipboardItem, Context, CursorStyle,
     Element as GpuiElement, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    FocusHandle, Focusable, FontWeight, Global, GlobalElementId, InspectorElementId, KeyBinding,
-    KeystrokeEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, Render, ScrollStrategy, ShapedLine, SharedString, Style, TextRun,
-    UTF16Selection, UnderlineStyle, UniformListScrollHandle, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
-    div, fill, point, prelude::*, px, relative, rgb, rgba, size, uniform_list,
+    FocusHandle, Focusable, FontWeight, Global, GlobalElementId, Image, ImageFormat,
+    InspectorElementId, KeyBinding, KeystrokeEvent, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, PaintQuad, Pixels, Point, Render, ScrollStrategy,
+    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle,
+    UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, actions,
+    div, fill, img, point, prelude::*, px, relative, rgb, rgba, size, uniform_list,
 };
 #[cfg(target_os = "macos")]
 use objc::rc::StrongPtr;
@@ -58,8 +59,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use storage::{
     BowlExportBundle, BowlExportItem, BowlExportParameter, ClipboardItemType, ClipboardParameter,
-    ClipboardRecord, ClipboardStorage, SearchQuery, bowl_name_from_tags, parse_search_query,
-    render_parameterized_content, tags_without_bowl,
+    ClipboardRecord, ClipboardStorage, ImageAttachment, SearchQuery, bowl_name_from_tags,
+    parse_search_query, render_parameterized_content, tags_without_bowl,
 };
 
 actions!(

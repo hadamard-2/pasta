@@ -423,10 +423,10 @@ impl LauncherView {
         });
     }
 
-    pub(crate) fn mark_self_clipboard_write(&self, content: &str, cx: &mut Context<Self>) {
+    pub(crate) fn mark_self_clipboard_write(&self, bytes: &[u8], cx: &mut Context<Self>) {
         cx.global_mut::<SelfClipboardWriteState>().pending = Some(PendingSelfClipboardWrite {
             due_at: Instant::now() + Duration::from_secs(5),
-            expected_hash: clipboard_text_hash(content),
+            expected_hash: clipboard_bytes_hash(bytes),
         });
     }
 
@@ -656,7 +656,31 @@ impl LauncherView {
             return;
         }
 
-        self.mark_self_clipboard_write(&item.content, cx);
+        if let Some(image) = &item.image {
+            let Ok(bytes) = std::fs::read(&image.path) else {
+                show_macos_notification("Pasta", "Couldn't read image from disk.");
+                return;
+            };
+            let format = ImageFormat::from_mime_type(&image.mime_type).unwrap_or(ImageFormat::Png);
+
+            self.mark_self_clipboard_write(&bytes, cx);
+            cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(
+                format,
+                bytes.clone(),
+            )));
+            // On Wayland, the GPUI window must stay alive to serve paste requests.
+            // Since Pasta destroys the window on hide, also write via wl-clipboard-rs
+            // which forks a background process to serve the data independently.
+            #[cfg(target_os = "linux")]
+            write_clipboard_image_bytes(&bytes, &image.mime_type);
+
+            show_macos_notification("Pasta", "Image copied to clipboard.");
+            self.begin_close_transition(LauncherExitIntent::Hide);
+            cx.notify();
+            return;
+        }
+
+        self.mark_self_clipboard_write(item.content.as_bytes(), cx);
         cx.write_to_clipboard(ClipboardItem::new_string(item.content.clone()));
         // On Wayland, the GPUI window must stay alive to serve paste requests.
         // Since Pasta destroys the window on hide, also write via wl-clipboard-rs
@@ -1992,7 +2016,7 @@ impl LauncherView {
             }
         };
 
-        self.mark_self_clipboard_write(&rendered, cx);
+        self.mark_self_clipboard_write(rendered.as_bytes(), cx);
         #[cfg(target_os = "linux")]
         write_clipboard_text(&rendered);
         cx.write_to_clipboard(ClipboardItem::new_string(rendered));
@@ -2245,7 +2269,7 @@ impl LauncherView {
             }
         };
 
-        self.mark_self_clipboard_write(&transformed, cx);
+        self.mark_self_clipboard_write(transformed.as_bytes(), cx);
         cx.write_to_clipboard(ClipboardItem::new_string(transformed.clone()));
         #[cfg(target_os = "linux")]
         write_clipboard_text(&transformed);
@@ -3168,6 +3192,10 @@ fn build_bowl_export_bundle(
         exported_at: chrono::Utc::now().to_rfc3339(),
         items: items
             .iter()
+            // Images aren't exportable yet — bowls are a text/snippet
+            // format and base64-embedding raw image bytes would bloat
+            // every export; skip them rather than add a placeholder.
+            .filter(|item| item.item_type != ClipboardItemType::Image)
             .map(|item| build_bowl_export_item(item, Some(storage)))
             .collect(),
     }
@@ -3534,6 +3562,7 @@ city = "New York"
                 },
             ],
             created_at: "2026-03-29T00:39:00Z".to_owned(),
+            image: None,
         };
 
         let item = build_bowl_export_item(&record, None);
@@ -3571,6 +3600,7 @@ city = "New York"
             tags: vec!["secret".to_owned(), "BOWL:K8S-OPS".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-29T00:39:00Z".to_owned(),
+            image: None,
         };
 
         let item = build_bowl_export_item(&record, None);

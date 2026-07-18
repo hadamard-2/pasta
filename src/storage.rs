@@ -16,6 +16,7 @@ use aes_gcm::{
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
+use image::ImageReader;
 use keyring::{Entry, Error as KeyringError};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,7 @@ pub enum ClipboardItemType {
     Code,
     Command,
     Password,
+    Image,
 }
 
 impl ClipboardItemType {
@@ -51,6 +53,7 @@ impl ClipboardItemType {
             Self::Code => "code",
             Self::Command => "command",
             Self::Password => "password",
+            Self::Image => "image",
         }
     }
 
@@ -60,6 +63,7 @@ impl ClipboardItemType {
             Self::Code => "CODE",
             Self::Command => "CMD",
             Self::Password => "PASS",
+            Self::Image => "IMG",
         }
     }
 
@@ -68,6 +72,7 @@ impl ClipboardItemType {
             "code" => Self::Code,
             "command" => Self::Command,
             "password" => Self::Password,
+            "image" => Self::Image,
             _ => Self::Text,
         }
     }
@@ -79,6 +84,15 @@ pub struct ClipboardParameter {
     pub target: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImageAttachment {
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub byte_size: u64,
+    pub mime_type: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct ClipboardRecord {
     pub id: i64,
@@ -88,6 +102,7 @@ pub struct ClipboardRecord {
     pub tags: Vec<String>,
     pub parameters: Vec<ClipboardParameter>,
     pub created_at: String,
+    pub image: Option<ImageAttachment>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -245,7 +260,22 @@ impl ClipboardStorage {
         if let Ok(mut cache) = self.neural_embedding_cache.lock() {
             cache.clear();
         }
+        if let Ok(dir) = self.images_dir() {
+            let _ = fs::remove_dir_all(&dir);
+        }
         Ok(())
+    }
+
+    /// The directory clipboard image attachments are written to, as a sibling
+    /// of the SQLite database file. Created on first use.
+    fn images_dir(&self) -> Result<PathBuf> {
+        let dir = self
+            .db_path
+            .parent()
+            .context("db path has no parent directory")?
+            .join("images");
+        fs::create_dir_all(&dir).context("unable to create images directory")?;
+        Ok(dir)
     }
 
     fn apply_persistent_pragmas(&self) -> Result<()> {
@@ -337,6 +367,69 @@ impl ClipboardStorage {
                 "",
                 content_hash,
                 created_at,
+            ],
+        )?;
+        let inserted_id = tx.last_insert_rowid();
+        tx.commit()?;
+        self.sync_index_record_from_db(inserted_id)?;
+        Ok(true)
+    }
+
+    /// Inserts a clipboard image, deduplicating by content hash the same way
+    /// [`Self::upsert_clipboard_item_with_hint`] does for text: a repeat copy
+    /// of bytes already in history is a no-op, not a reorder.
+    pub fn upsert_clipboard_image_item(&self, bytes: &[u8], mime_type: &str) -> Result<bool> {
+        if bytes.is_empty() {
+            return Ok(false);
+        }
+
+        let content_hash = bytes_hash(bytes);
+
+        let mut conn = self.open()?;
+        let tx = conn.transaction()?;
+
+        let existing: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = ?1 ORDER BY id DESC LIMIT 1",
+                params![content_hash],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if existing.is_some() {
+            tx.rollback()?;
+            return Ok(false);
+        }
+
+        let extension = extension_for_mime_type(mime_type);
+        let images_dir = self.images_dir()?;
+        let image_path = images_dir.join(format!("{content_hash}.{extension}"));
+        if !image_path.exists() {
+            fs::write(&image_path, bytes).context("unable to write clipboard image to disk")?;
+        }
+
+        let (width, height) = ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()
+            .and_then(|reader| reader.into_dimensions().ok())
+            .unwrap_or((0, 0));
+
+        let created_at = Utc::now().to_rfc3339();
+        let image_path_str = image_path.to_string_lossy().into_owned();
+
+        tx.execute(
+            "INSERT INTO clipboard_items (item_type, content, is_encrypted, tags, parameters, description, content_hash, created_at, image_path, image_width, image_height, image_byte_size)
+             VALUES (?1, ?2, 0, ?3, '[]', '', ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                ClipboardItemType::Image.as_str(),
+                mime_type,
+                "[]",
+                content_hash,
+                created_at,
+                image_path_str,
+                width,
+                height,
+                bytes.len() as i64,
             ],
         )?;
         let inserted_id = tx.last_insert_rowid();
@@ -652,10 +745,20 @@ impl ClipboardStorage {
     }
 
     pub fn delete_item(&self, id: i64) -> Result<bool> {
+        let image_path = self
+            .memory_index
+            .lock()
+            .ok()
+            .and_then(|index| index.by_id.get(&id).and_then(|r| r.record.image.clone()))
+            .map(|image| image.path);
+
         let conn = self.open()?;
         let deleted = conn.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
         if deleted > 0 {
             self.remove_index_record(id);
+            if let Some(path) = image_path {
+                let _ = fs::remove_file(path);
+            }
         }
         Ok(deleted > 0)
     }
@@ -1143,6 +1246,33 @@ impl ClipboardStorage {
         )?;
         self.ensure_parameters_column(&conn)?;
         self.ensure_description_column(&conn)?;
+        self.ensure_image_columns(&conn)?;
+        Ok(())
+    }
+
+    fn ensure_image_columns(&self, conn: &Connection) -> Result<()> {
+        let mut existing = HashSet::new();
+        let mut stmt = conn.prepare("PRAGMA table_info(clipboard_items)")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            existing.insert(name);
+        }
+
+        let columns: [(&str, &str); 4] = [
+            ("image_path", "TEXT"),
+            ("image_width", "INTEGER"),
+            ("image_height", "INTEGER"),
+            ("image_byte_size", "INTEGER"),
+        ];
+        for (name, sql_type) in columns {
+            if !existing.contains(name) {
+                conn.execute(
+                    &format!("ALTER TABLE clipboard_items ADD COLUMN {name} {sql_type}"),
+                    [],
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -1183,7 +1313,8 @@ impl ClipboardStorage {
     fn rebuild_memory_index(&self) -> Result<()> {
         let conn = self.open()?;
         let mut stmt = conn.prepare(
-            "SELECT id, item_type, content, is_encrypted, tags, parameters, description, created_at, content_hash
+            "SELECT id, item_type, content, is_encrypted, tags, parameters, description, created_at, content_hash,
+                    image_path, image_width, image_height, image_byte_size
              FROM clipboard_items
              ORDER BY id DESC",
         )?;
@@ -1225,7 +1356,8 @@ impl ClipboardStorage {
     ) -> Result<Option<IndexedRecord>> {
         let result: Option<Option<IndexedRecord>> = conn
             .query_row(
-                "SELECT id, item_type, content, is_encrypted, tags, parameters, description, created_at, content_hash
+                "SELECT id, item_type, content, is_encrypted, tags, parameters, description, created_at, content_hash,
+                        image_path, image_width, image_height, image_byte_size
                  FROM clipboard_items
                  WHERE id = ?1",
                 params![id],
@@ -1248,6 +1380,21 @@ impl ClipboardStorage {
         let description: String = row.get(6)?;
         let created_at: String = row.get(7)?;
         let content_hash: String = row.get(8)?;
+        let image_path: Option<String> = row.get(9)?;
+        let image_width: Option<i64> = row.get(10)?;
+        let image_height: Option<i64> = row.get(11)?;
+        let image_byte_size: Option<i64> = row.get(12)?;
+        let image = image_path.map(|path| {
+            let path = PathBuf::from(path);
+            let mime_type = mime_type_for_path(&path);
+            ImageAttachment {
+                path,
+                width: image_width.unwrap_or(0).max(0) as u32,
+                height: image_height.unwrap_or(0).max(0) as u32,
+                byte_size: image_byte_size.unwrap_or(0).max(0) as u64,
+                mime_type,
+            }
+        });
 
         if is_encrypted == 1 {
             let Ok(decrypted) = self.crypto.decrypt(&content) else {
@@ -1283,6 +1430,7 @@ impl ClipboardStorage {
                 tags,
                 parameters,
                 created_at,
+                image,
             },
             content_hash,
             content_lower,
@@ -2991,6 +3139,49 @@ fn content_hash(content: &str) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn bytes_hash(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Maps a clipboard image MIME type (as reported by the platform clipboard,
+/// e.g. `gpui::ImageFormat::mime_type()`) to the file extension used when
+/// writing the image to the on-disk image store.
+fn extension_for_mime_type(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/svg+xml" => "svg",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        _ => "png",
+    }
+}
+
+/// The inverse of [`extension_for_mime_type`], used to recover a stored
+/// image's MIME type from its file extension without a dedicated DB column.
+fn mime_type_for_path(path: &std::path::Path) -> String {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "tiff" | "tif" => "image/tiff",
+        _ => "image/png",
+    }
+    .to_owned()
+}
+
 fn combined_search_score(item: &ScoredRecord) -> f32 {
     let base = if item.lexical_score > 0.0 {
         2.0 + (item.lexical_score * 1.2) + (item.semantic_score * 0.3) + (item.neural_score * 0.5)
@@ -3632,6 +3823,11 @@ fn insert_item_type_aliases(item_type: ClipboardItemType, terms: &mut HashSet<St
         ClipboardItemType::Password => {
             terms.insert("secret".to_owned());
         }
+        ClipboardItemType::Image => {
+            terms.insert("picture".to_owned());
+            terms.insert("screenshot".to_owned());
+            terms.insert("photo".to_owned());
+        }
     }
 }
 
@@ -3967,6 +4163,7 @@ mod tests {
             tags: vec!["command".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
+            image: None,
         };
 
         assert!(record_matches_query(&record, "stale container", false));
@@ -3985,6 +4182,7 @@ mod tests {
             tags: vec!["text".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
+            image: None,
         };
 
         assert!(record_matches_query(&record, "needle-at-the-end", false));
@@ -4000,6 +4198,7 @@ mod tests {
             tags: vec!["lang:rust".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
+            image: None,
         };
 
         assert!(record_matches_query(&record, "rs", true));
@@ -4017,6 +4216,7 @@ mod tests {
             tags: vec!["text".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
+            image: None,
         };
 
         assert!(record_matches_query(&record, "yaml", true));

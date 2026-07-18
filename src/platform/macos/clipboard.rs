@@ -264,8 +264,13 @@ pub(crate) fn write_clipboard_text(value: &str) {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn clipboard_text_hash(value: &str) -> String {
+    clipboard_bytes_hash(value.as_bytes())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn clipboard_bytes_hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
+    hasher.update(bytes);
     let digest = hasher.finalize();
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -291,7 +296,7 @@ pub(crate) fn process_secret_autoclear(cx: &mut App) {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, text: &str) -> bool {
+pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, bytes: &[u8]) -> bool {
     let pending = cx
         .try_global::<SelfClipboardWriteState>()
         .and_then(|state| state.pending.clone());
@@ -302,7 +307,7 @@ pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, text: &str) -> bo
         return false;
     }
 
-    if clipboard_text_hash(text) == pending.expected_hash {
+    if clipboard_bytes_hash(bytes) == pending.expected_hash {
         cx.global_mut::<SelfClipboardWriteState>().pending = None;
         return true;
     }

@@ -304,9 +304,14 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for WaylandClipboardMonitorState {
 
 /// SHA-256 hash of the given text, used to de-duplicate clipboard items.
 pub(crate) fn clipboard_text_hash(value: &str) -> String {
+    clipboard_bytes_hash(value.as_bytes())
+}
+
+/// SHA-256 hash of raw bytes, used to de-duplicate clipboard items (text or image).
+pub(crate) fn clipboard_bytes_hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
+    hasher.update(bytes);
     format!("{:x}", hasher.finalize())
 }
 
@@ -322,7 +327,7 @@ pub(crate) fn read_clipboard_snapshot() -> Option<ClipboardSnapshot> {
 
 /// Returns true if we should ignore this clipboard write because we
 /// ourselves just wrote it.
-pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, text: &str) -> bool {
+pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, bytes: &[u8]) -> bool {
     let pending = cx
         .try_global::<SelfClipboardWriteState>()
         .and_then(|state| state.pending.clone());
@@ -333,7 +338,7 @@ pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, text: &str) -> bo
         return false;
     }
 
-    if clipboard_text_hash(text) == pending.expected_hash {
+    if clipboard_bytes_hash(bytes) == pending.expected_hash {
         cx.global_mut::<SelfClipboardWriteState>().pending = None;
         return true;
     }
@@ -411,6 +416,24 @@ pub(crate) fn write_clipboard_text(value: &str) {
     }
 
     eprintln!("warning: no supported Linux clipboard backend found");
+}
+
+/// Wayland-only counterpart to [`write_clipboard_text`] for image bytes: GPUI's
+/// window is destroyed on hide, so a background wl-clipboard-rs writer keeps
+/// serving paste requests after that. X11 doesn't need this — GPUI's own X11
+/// client already implements `write_to_clipboard` for images natively.
+pub(crate) fn write_clipboard_image_bytes(bytes: &[u8], mime_type: &str) {
+    if !is_wayland_session() {
+        return;
+    }
+
+    let options = CopyOptions::new();
+    if let Err(err) = options.copy(
+        Source::Bytes(bytes.to_vec().into_boxed_slice()),
+        CopyMimeType::Specific(mime_type.to_owned()),
+    ) {
+        eprintln!("warning: failed to copy image to Wayland clipboard: {err}");
+    }
 }
 
 pub(crate) fn read_clipboard_text() -> Option<String> {

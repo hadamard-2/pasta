@@ -181,7 +181,7 @@ impl Render for LauncherView {
                         .child(div().flex_1().min_w(px(0.0)).child(TextInputElement::new(
                             cx.entity(),
                             TextInputTarget::Query,
-                            "Search clipboard",
+                            "Pasta",
                             palette,
                             query_input_enabled,
                         ))),
@@ -1601,6 +1601,16 @@ impl LauncherView {
                 .child(created_detail),
         );
 
+        if let Some(image) = &item.image {
+            pane = pane.child(
+                div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(palette.muted_text)
+                    .child(format!("{} · {}", image.mime_type, format_image_metadata(image))),
+            );
+        }
+
         if !item.description.trim().is_empty() {
             pane = pane.child(
                 div()
@@ -1690,6 +1700,20 @@ impl LauncherView {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(qr_canvas_element(modules, width)),
+            )
+            .into_any_element()
+        } else if let Some(image) = &item.image {
+            pane.child(
+                div()
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(
+                        img(image.path.clone())
+                            .w_full()
+                            .h_full()
+                            .object_fit(ObjectFit::Contain),
+                    ),
             )
             .into_any_element()
         } else {
@@ -1792,16 +1816,45 @@ impl LauncherView {
                 .child(type_icon_glyph(item.item_type)),
         );
 
-        // Title — single line, ellipsized on overflow.
-        fill = fill.child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate()
-                .text_size(px(14.0))
-                .text_color(palette.row_text)
-                .child(row_data.title.clone()),
-        );
+        // Title — single line, ellipsized on overflow. Image rows swap the
+        // text title for a small thumbnail plus dimensions/size label.
+        if let Some(image) = &item.image {
+            fill = fill.child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        img(image.path.clone())
+                            .flex_none()
+                            .w(px(24.0))
+                            .h(px(24.0))
+                            .rounded(px(4.0))
+                            .object_fit(ObjectFit::Cover),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_size(px(14.0))
+                            .text_color(palette.row_text)
+                            .child(row_data.title.clone()),
+                    ),
+            );
+        } else {
+            fill = fill.child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_size(px(14.0))
+                    .text_color(palette.row_text)
+                    .child(row_data.title.clone()),
+            );
+        }
 
         if let Some(pill) = secret_pill {
             fill = fill.child(

@@ -103,6 +103,13 @@ pub(crate) fn type_color(item_type: ClipboardItemType, dark: bool) -> gpui::Hsla
                 rgb(0xA85F81).into()
             }
         }
+        ClipboardItemType::Image => {
+            if dark {
+                rgb(0x9B8FD9).into()
+            } else {
+                rgb(0x6F63A8).into()
+            }
+        }
     }
 }
 
@@ -114,6 +121,7 @@ pub(crate) fn type_icon_glyph(item_type: ClipboardItemType) -> &'static str {
         ClipboardItemType::Code => "#",
         ClipboardItemType::Command => "$",
         ClipboardItemType::Password => "*",
+        ClipboardItemType::Image => "I",
     }
 }
 

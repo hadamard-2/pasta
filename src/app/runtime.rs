@@ -572,6 +572,21 @@ pub(crate) fn spawn_hotkey_listener(_cx: &mut App) {
     });
 }
 
+/// Refreshes the launcher's result list after a clipboard watcher insert, if
+/// the window is currently alive. Shared by the text and image insert paths
+/// on both platform watchers.
+fn refresh_launcher_after_clipboard_insert(cx: &mut App) {
+    if let Some(window) = cx
+        .try_global::<LauncherState>()
+        .and_then(|state| state.window)
+    {
+        let _ = window.update(cx, |view, _window, cx| {
+            view.refresh_items(view.preferred_refresh_execution());
+            cx.notify();
+        });
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
     let storage = cx.global::<StorageState>().storage.clone();
@@ -587,11 +602,45 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
             if current_change_count != last_change_count {
                 last_change_count = current_change_count;
 
-                if let Some(snapshot) = read_clipboard_snapshot()
+                let clipboard_image = cx
+                    .update(|cx| {
+                        cx.read_from_clipboard().and_then(|item| {
+                            item.into_entries().find_map(|entry| match entry {
+                                ClipboardEntry::Image(image) => Some(image),
+                                _ => None,
+                            })
+                        })
+                    })
+                    .ok()
+                    .flatten();
+
+                if let Some(image) = clipboard_image {
+                    let should_ignore = cx
+                        .update(|cx| should_ignore_self_clipboard_write(cx, &image.bytes))
+                        .unwrap_or(false);
+                    if should_ignore {
+                        continue;
+                    }
+
+                    let storage_for_insert = storage.clone();
+                    let mime_type = image.format.mime_type().to_owned();
+                    let bytes = image.bytes.clone();
+                    let inserted = cx
+                        .background_executor()
+                        .spawn(async move {
+                            storage_for_insert
+                                .upsert_clipboard_image_item(&bytes, &mime_type)
+                                .unwrap_or(false)
+                        })
+                        .await;
+                    if inserted {
+                        let _ = cx.update(refresh_launcher_after_clipboard_insert);
+                    }
+                } else if let Some(snapshot) = read_clipboard_snapshot()
                     && !snapshot.is_transient
                 {
                     let should_ignore = cx
-                        .update(|cx| should_ignore_self_clipboard_write(cx, &snapshot.text))
+                        .update(|cx| should_ignore_self_clipboard_write(cx, snapshot.text.as_bytes()))
                         .unwrap_or(false);
                     if should_ignore {
                         continue;
@@ -618,17 +667,7 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                         })
                         .await;
                     if inserted {
-                        let _ = cx.update(|cx| {
-                            if let Some(window) = cx
-                                .try_global::<LauncherState>()
-                                .and_then(|state| state.window)
-                            {
-                                let _ = window.update(cx, |view, _window, cx| {
-                                    view.refresh_items(view.preferred_refresh_execution());
-                                    cx.notify();
-                                });
-                            }
-                        });
+                        let _ = cx.update(refresh_launcher_after_clipboard_insert);
                     }
                 }
             }
@@ -657,11 +696,45 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
             if current_change_count != last_change_count {
                 last_change_count = current_change_count;
 
-                if let Some(snapshot) = read_clipboard_snapshot()
+                let clipboard_image = cx
+                    .update(|cx| {
+                        cx.read_from_clipboard().and_then(|item| {
+                            item.into_entries().find_map(|entry| match entry {
+                                ClipboardEntry::Image(image) => Some(image),
+                                _ => None,
+                            })
+                        })
+                    })
+                    .ok()
+                    .flatten();
+
+                if let Some(image) = clipboard_image {
+                    let should_ignore = cx
+                        .update(|cx| should_ignore_self_clipboard_write(cx, &image.bytes))
+                        .unwrap_or(false);
+                    if should_ignore {
+                        continue;
+                    }
+
+                    let storage_for_insert = storage.clone();
+                    let mime_type = image.format.mime_type().to_owned();
+                    let bytes = image.bytes.clone();
+                    let inserted = cx
+                        .background_executor()
+                        .spawn(async move {
+                            storage_for_insert
+                                .upsert_clipboard_image_item(&bytes, &mime_type)
+                                .unwrap_or(false)
+                        })
+                        .await;
+                    if inserted {
+                        let _ = cx.update(refresh_launcher_after_clipboard_insert);
+                    }
+                } else if let Some(snapshot) = read_clipboard_snapshot()
                     && !snapshot.is_transient
                 {
                     let should_ignore = cx
-                        .update(|cx| should_ignore_self_clipboard_write(cx, &snapshot.text))
+                        .update(|cx| should_ignore_self_clipboard_write(cx, snapshot.text.as_bytes()))
                         .unwrap_or(false);
                     if should_ignore {
                         continue;
@@ -689,17 +762,7 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                         .await;
 
                     if inserted {
-                        let _ = cx.update(|cx| {
-                            if let Some(window) = cx
-                                .try_global::<LauncherState>()
-                                .and_then(|state| state.window)
-                            {
-                                let _ = window.update(cx, |view, _window, cx| {
-                                    view.refresh_items(view.preferred_refresh_execution());
-                                    cx.notify();
-                                });
-                            }
-                        });
+                        let _ = cx.update(refresh_launcher_after_clipboard_insert);
                     }
                 }
             }
