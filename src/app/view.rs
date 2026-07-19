@@ -1805,8 +1805,14 @@ impl LauncherView {
                     move |style| style.bg(row_hover)
                 })
                 .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.select_result_index(ix, cx);
+                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    let is_double_click =
+                        matches!(event, ClickEvent::Mouse(mouse) if mouse.up.click_count >= 2);
+                    if is_double_click {
+                        this.copy_index_to_clipboard(ix, cx);
+                    } else {
+                        this.select_result_index(ix, cx);
+                    }
                 }));
         }
 

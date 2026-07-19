@@ -763,6 +763,21 @@ impl ClipboardStorage {
         Ok(deleted > 0)
     }
 
+    /// Bumps `created_at` to now, so re-copying an existing item resurfaces
+    /// it at the top of the default (recency-ordered) listing next time the
+    /// launcher opens — otherwise a re-copy leaves the item exactly where
+    /// it already was, which reads as if nothing happened.
+    pub fn touch_clipboard_item(&self, id: i64) -> Result<()> {
+        let conn = self.open()?;
+        let created_at = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE clipboard_items SET created_at = ?1 WHERE id = ?2",
+            params![created_at, id],
+        )?;
+        drop(conn);
+        self.sync_index_record_from_db(id)
+    }
+
     pub fn mark_item_as_secret(&self, id: i64) -> Result<bool> {
         let mut conn = self.open()?;
         let tx = conn.transaction()?;

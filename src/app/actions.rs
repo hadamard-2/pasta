@@ -656,6 +656,8 @@ impl LauncherView {
             return;
         }
 
+        let _ = self.storage.touch_clipboard_item(item.id);
+
         if let Some(image) = &item.image {
             let Ok(bytes) = std::fs::read(&image.path) else {
                 show_macos_notification("Pasta", "Couldn't read image from disk.");
