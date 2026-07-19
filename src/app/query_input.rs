@@ -312,6 +312,17 @@ fn next_boundary(text: &str, offset: usize) -> usize {
         .unwrap_or(text.len())
 }
 
+/// Where Ctrl/Option+Backspace should cut back to: past any trailing
+/// whitespace, then back through the run of non-whitespace before it —
+/// the same "delete previous word" behavior most text fields use.
+fn previous_word_boundary(text: &str, offset: usize) -> usize {
+    let trimmed = text[..offset].trim_end();
+    match trimmed.rfind(char::is_whitespace) {
+        Some(pos) => pos + trimmed[pos..].chars().next().unwrap().len_utf8(),
+        None => 0,
+    }
+}
+
 impl LauncherView {
     pub(super) fn query_input_enabled(&self) -> bool {
         self.info_editor_target_id.is_none()
@@ -553,6 +564,10 @@ impl LauncherView {
         previous_boundary(self.text_input_content(target), offset)
     }
 
+    fn text_input_previous_word_boundary(&self, target: TextInputTarget, offset: usize) -> usize {
+        previous_word_boundary(self.text_input_content(target), offset)
+    }
+
     fn text_input_next_boundary(&self, target: TextInputTarget, offset: usize) -> usize {
         next_boundary(self.text_input_content(target), offset)
     }
@@ -625,6 +640,23 @@ impl LauncherView {
         if self.text_input_state(target).selected_range.is_empty() {
             let previous =
                 self.text_input_previous_boundary(target, self.text_input_cursor_offset(target));
+            self.set_select_to(target, previous);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    pub(super) fn query_delete_word_backward(
+        &mut self,
+        _: &QueryDeleteWordBackward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.active_text_input_target(window) else {
+            return;
+        };
+        if self.text_input_state(target).selected_range.is_empty() {
+            let previous = self
+                .text_input_previous_word_boundary(target, self.text_input_cursor_offset(target));
             self.set_select_to(target, previous);
         }
         self.replace_text_in_range(None, "", window, cx);

@@ -67,6 +67,7 @@ actions!(
     pasta_query_input,
     [
         QueryBackspace,
+        QueryDeleteWordBackward,
         QueryLeft,
         QueryRight,
         QuerySelectLeft,
@@ -534,6 +535,14 @@ fn main() {
         }
         cx.bind_keys([
             KeyBinding::new("backspace", QueryBackspace, Some("PastaTextInput")),
+            // macOS's native word-delete shortcut is Option+Delete, not Cmd+Delete
+            // (which used to be bound here as a delete-item shortcut and was
+            // removed for being too easy to trigger by accident).
+            KeyBinding::new(
+                "alt-backspace",
+                QueryDeleteWordBackward,
+                Some("PastaTextInput"),
+            ),
             KeyBinding::new("left", QueryLeft, Some("PastaTextInput")),
             KeyBinding::new("right", QueryRight, Some("PastaTextInput")),
             KeyBinding::new("shift-left", QuerySelectLeft, Some("PastaTextInput")),
@@ -636,6 +645,11 @@ fn main() {
         }
         cx.bind_keys([
             KeyBinding::new("backspace", QueryBackspace, Some("PastaTextInput")),
+            KeyBinding::new(
+                "ctrl-backspace",
+                QueryDeleteWordBackward,
+                Some("PastaTextInput"),
+            ),
             KeyBinding::new("left", QueryLeft, Some("PastaTextInput")),
             KeyBinding::new("right", QueryRight, Some("PastaTextInput")),
             KeyBinding::new("shift-left", QuerySelectLeft, Some("PastaTextInput")),
