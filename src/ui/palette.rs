@@ -47,7 +47,7 @@ pub(crate) fn palette_for(surface_alpha: f32) -> Palette {
         action_bar_bg: rgba(0x1C1C1Fff),
         keycap_bg: rgba(0x2A2A2Eff),
         keycap_text: rgba(0x8A8A8Fff),
-        accent: rgba(0x00664Cff),
+        accent: rgba(0x31A586ff),
     };
 
     // Scale window surface elements by the fixed alpha factor.
