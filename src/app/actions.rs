@@ -1,4 +1,5 @@
 use super::state::{CachedRowPresentation, SearchRequest, SearchResponse, TextInputState};
+use super::view::EMOJI_GRID_COLUMNS;
 use crate::storage::{
     SEMANTIC_MIN_QUERY_CHARS, SEMANTIC_SOURCE_TEXT_LIMIT, SearchExecution, bounded_text_prefix,
     encode_f32_vec_base64, semantic_embedding,
@@ -90,6 +91,12 @@ impl LauncherView {
             show_command_help: false,
             caret_visible: true,
             caret_blink_due_at: Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS),
+            emoji_search_active: false,
+            emoji_search_input_state: TextInputState::new(cx),
+            emoji_search_query: String::new(),
+            emoji_search_results: Vec::new(),
+            emoji_search_selected_index: 0,
+            emoji_results_scroll: UniformListScrollHandle::new(),
         };
         view.begin_search_generation();
         view.request_search(SearchExecution::Fast);
@@ -143,6 +150,11 @@ impl LauncherView {
         self.suppress_auto_hide = false;
         self.suppress_auto_hide_until = None;
         self.show_command_help = false;
+        self.emoji_search_active = false;
+        self.emoji_search_input_state.reset();
+        self.emoji_search_query.clear();
+        self.emoji_search_results.clear();
+        self.emoji_search_selected_index = 0;
         self.begin_search_generation();
         self.request_search(SearchExecution::Fast);
     }
@@ -706,6 +718,108 @@ impl LauncherView {
         }
         self.begin_close_transition(LauncherExitIntent::Hide);
         cx.notify();
+    }
+
+    /// True when the query looks like the user is reaching for the emoji
+    /// search affordance (e.g. "e", "emo", "emoji") — checked only once no
+    /// other editor mode is active, since modes are mutually exclusive.
+    pub(crate) fn showing_emoji_affordance(&self) -> bool {
+        !self.emoji_search_active && emoji::should_show_emoji_affordance(&self.query)
+    }
+
+    pub(crate) fn enter_emoji_search_mode(&mut self, cx: &mut Context<Self>) {
+        self.emoji_search_active = true;
+        self.emoji_search_query.clear();
+        self.emoji_search_input_state.reset();
+        self.refresh_emoji_search_results();
+        self.queue_text_input_focus(TextInputTarget::EmojiSearch);
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_emoji_search(&mut self, cx: &mut Context<Self>) {
+        self.emoji_search_active = false;
+        self.emoji_search_query.clear();
+        self.emoji_search_input_state.reset();
+        self.emoji_search_results.clear();
+        self.emoji_search_selected_index = 0;
+        self.queue_text_input_focus(TextInputTarget::Query);
+        cx.notify();
+    }
+
+    pub(crate) fn refresh_emoji_search_results(&mut self) {
+        let embedder = if self.pasta_brain_enabled {
+            self.storage.get_neural_embedder()
+        } else {
+            None
+        };
+        self.emoji_search_results =
+            emoji::search_emojis(&self.emoji_search_query, embedder.as_deref(), 40);
+        self.emoji_search_selected_index = 0;
+        self.emoji_results_scroll
+            .scroll_to_item(0, ScrollStrategy::Center);
+    }
+
+    /// Moves the grid selection by `delta` flat positions — pass `±1` for
+    /// Left/Right and `±EMOJI_GRID_COLUMNS` for Up/Down (the grid has no
+    /// row/column state of its own; `emoji_search_selected_index` is always
+    /// a flat index into `emoji_search_results`).
+    pub(crate) fn move_emoji_search_selection(&mut self, delta: i32, cx: &mut Context<Self>) {
+        if self.emoji_search_results.is_empty() {
+            self.emoji_search_selected_index = 0;
+            return;
+        }
+
+        let previous_index = self.emoji_search_selected_index;
+        let max_index = self.emoji_search_results.len() - 1;
+        self.emoji_search_selected_index =
+            (previous_index as i32 + delta).clamp(0, max_index as i32) as usize;
+
+        if self.emoji_search_selected_index != previous_index {
+            let row = self.emoji_search_selected_index / EMOJI_GRID_COLUMNS;
+            self.emoji_results_scroll
+                .scroll_to_item(row, ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
+
+    /// Copies the selected emoji and keeps the launcher open (so several can
+    /// be picked in a row). Uses `mark_self_clipboard_write` so this doesn't
+    /// create a clipboard-history entry — it's a picker action, not a
+    /// captured clipboard event.
+    pub(crate) fn copy_selected_emoji(&mut self, cx: &mut Context<Self>) {
+        let Some(entry_index) = self
+            .emoji_search_results
+            .get(self.emoji_search_selected_index)
+            .copied()
+        else {
+            return;
+        };
+        let Some((glyph, _name)) = emoji::entry_at(entry_index) else {
+            return;
+        };
+
+        self.mark_self_clipboard_write(glyph.as_bytes(), cx);
+        cx.write_to_clipboard(ClipboardItem::new_string(glyph.to_owned()));
+        #[cfg(target_os = "linux")]
+        write_clipboard_text(glyph);
+        show_macos_notification("Pasta", "Copied to clipboard.");
+        cx.notify();
+    }
+
+    pub(crate) fn handle_emoji_search_keystroke(
+        &mut self,
+        event: &KeystrokeEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event.keystroke.key.as_str() {
+            "escape" | "esc" => self.cancel_emoji_search(cx),
+            "up" | "arrowup" => self.move_emoji_search_selection(-(EMOJI_GRID_COLUMNS as i32), cx),
+            "down" | "arrowdown" => self.move_emoji_search_selection(EMOJI_GRID_COLUMNS as i32, cx),
+            "left" | "arrowleft" => self.move_emoji_search_selection(-1, cx),
+            "right" | "arrowright" => self.move_emoji_search_selection(1, cx),
+            "enter" | "return" => self.copy_selected_emoji(cx),
+            _ => {}
+        }
     }
 
     pub(crate) fn copy_index_to_clipboard(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -2347,6 +2461,11 @@ impl LauncherView {
             return;
         }
 
+        if self.emoji_search_active {
+            self.handle_emoji_search_keystroke(event, cx);
+            return;
+        }
+
         if command_navigation {
             match key {
                 "j" | ";" | "semicolon" => {
@@ -2390,6 +2509,10 @@ impl LauncherView {
                 return;
             }
             "enter" | "return" => {
+                if self.showing_emoji_affordance() {
+                    self.enter_emoji_search_mode(cx);
+                    return;
+                }
                 if matches!(
                     parse_search_query(&self.query),
                     SearchQuery::ExportBowl { .. }

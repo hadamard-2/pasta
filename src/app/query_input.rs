@@ -331,6 +331,7 @@ impl LauncherView {
             && self.parameter_editor_target_id.is_none()
             && self.parameter_fill_target_id.is_none()
             && !self.transform_menu_open
+            && !self.emoji_search_active
     }
 
     pub(super) fn apply_pending_text_input_focus(&mut self, window: &mut Window) {
@@ -355,6 +356,7 @@ impl LauncherView {
             TextInputTarget::BowlEditor => &self.bowl_editor_input_state,
             TextInputTarget::ParameterName => &self.parameter_name_input_state,
             TextInputTarget::ParameterFill => &self.parameter_fill_input_state,
+            TextInputTarget::EmojiSearch => &self.emoji_search_input_state,
         }
     }
 
@@ -366,6 +368,7 @@ impl LauncherView {
             TextInputTarget::BowlEditor => &mut self.bowl_editor_input_state,
             TextInputTarget::ParameterName => &mut self.parameter_name_input_state,
             TextInputTarget::ParameterFill => &mut self.parameter_fill_input_state,
+            TextInputTarget::EmojiSearch => &mut self.emoji_search_input_state,
         }
     }
 
@@ -385,6 +388,7 @@ impl LauncherView {
                 .get(self.parameter_fill_focus_index)
                 .map(String::as_str)
                 .unwrap_or(""),
+            TextInputTarget::EmojiSearch => &self.emoji_search_query,
         }
     }
 
@@ -452,6 +456,7 @@ impl LauncherView {
                     *active = content;
                 }
             }
+            TextInputTarget::EmojiSearch => self.emoji_search_query = content,
         }
     }
 
@@ -469,6 +474,7 @@ impl LauncherView {
             TextInputTarget::ParameterFill => {
                 self.parameter_fill_target_id.is_some() && !self.parameter_fill_values.is_empty()
             }
+            TextInputTarget::EmojiSearch => self.emoji_search_active,
         }
     }
 
@@ -479,6 +485,7 @@ impl LauncherView {
             TextInputTarget::BowlEditor,
             TextInputTarget::ParameterName,
             TextInputTarget::ParameterFill,
+            TextInputTarget::EmojiSearch,
             TextInputTarget::Query,
         ]
         .into_iter()
@@ -578,6 +585,9 @@ impl LauncherView {
         } else if target == TextInputTarget::BowlEditor {
             self.bowl_editor_suggestions =
                 self.storage.suggest_bowl_names(&self.bowl_editor_input, 6);
+            cx.notify();
+        } else if target == TextInputTarget::EmojiSearch {
+            self.refresh_emoji_search_results();
             cx.notify();
         } else {
             cx.notify();

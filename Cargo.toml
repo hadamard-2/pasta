@@ -64,6 +64,7 @@ anyhow = "1.0.100"
 base64 = "0.22.1"
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 dirs = "5.0.1"
+emojis = "0.9"
 fastembed = { version = "4", default-features = false, features = ["hf-hub"] }
 futures = "0.3.31"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }

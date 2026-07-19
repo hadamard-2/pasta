@@ -1,6 +1,7 @@
 #![allow(unexpected_cfgs)]
 #![allow(unused_imports)] // Phase 0: many imports used only by macOS or Linux platform code
 
+mod emoji;
 mod neural_embed;
 mod storage;
 
@@ -219,6 +220,7 @@ enum TextInputTarget {
     BowlEditor,
     ParameterName,
     ParameterFill,
+    EmojiSearch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -3333,7 +3333,7 @@ pub(crate) fn semantic_embedding(content: &str, seed_terms: &[String]) -> Vec<f3
     vector
 }
 
-fn semantic_tokenize(value: &str) -> Vec<String> {
+pub(crate) fn semantic_tokenize(value: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
 
@@ -3519,7 +3519,7 @@ fn stable_feature_hash(prefix: &str, value: &str) -> u64 {
     hash
 }
 
-fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
+pub(crate) fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
     if left.len() != right.len() || left.is_empty() {
         return 0.0;
     }

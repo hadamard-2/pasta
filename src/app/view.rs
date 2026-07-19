@@ -7,6 +7,11 @@ use super::state::CachedRowPresentation;
 use crate::*;
 use gpui::{AnyElement, StatefulInteractiveElement, canvas, hsla, size, svg};
 
+/// Emoji tiles are laid out `EMOJI_GRID_COLUMNS` per row, each taking an
+/// equal relative share of the row's width — sidesteps needing to measure
+/// the panel's actual pixel width to decide how many tiles fit.
+pub(crate) const EMOJI_GRID_COLUMNS: usize = 10;
+
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_pending_text_input_focus(window);
@@ -190,6 +195,55 @@ impl Render for LauncherView {
             });
         if !self.tag_search_suggestions.is_empty() && query_input_enabled {
             content = content.child(self.render_tag_search_suggestions(palette, cx));
+        }
+
+        if self.showing_emoji_affordance() {
+            content = content.child(
+                div()
+                    .id("emoji-search-affordance")
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(palette.accent)
+                    .cursor_pointer()
+                    .hover({
+                        let row_hover = palette.row_hover_bg;
+                        move |style| style.bg(row_hover)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.enter_emoji_search_mode(cx);
+                    }))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(15.0))
+                            .flex()
+                            .justify_center()
+                            .text_size(px(14.0))
+                            .text_color(palette.accent)
+                            .child("🙂"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(14.0))
+                            .text_color(palette.title_text)
+                            .child("Emoji Search"),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(palette.muted_text)
+                            .child("Enter"),
+                    ),
+            );
         }
 
         if let Some(item_id) = self.info_editor_target_id {
@@ -1302,32 +1356,37 @@ impl Render for LauncherView {
             );
         }
 
-        let workspace = div()
-            .w_full()
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_hidden()
-            .flex()
-            .gap_2()
-            .child(
-                div()
-                    .w(relative(RESULTS_LIST_WIDTH_RATIO))
-                    .h_full()
-                    .min_w(px(0.0))
-                    .pt(px(4.0))
-                    .pb(px(12.0))
-                    .overflow_hidden()
-                    .child(results),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w(px(0.0))
-                    .pt(px(4.0))
-                    .pb(px(12.0))
-                    .child(self.render_preview_pane(palette)),
-            );
+        let workspace = if self.emoji_search_active {
+            self.render_emoji_search_workspace(palette, window, cx)
+        } else {
+            div()
+                .w_full()
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .flex()
+                .gap_2()
+                .child(
+                    div()
+                        .w(relative(RESULTS_LIST_WIDTH_RATIO))
+                        .h_full()
+                        .min_w(px(0.0))
+                        .pt(px(4.0))
+                        .pb(px(12.0))
+                        .overflow_hidden()
+                        .child(results),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .min_w(px(0.0))
+                        .pt(px(4.0))
+                        .pb(px(12.0))
+                        .child(self.render_preview_pane(palette)),
+                )
+                .into_any_element()
+        };
 
         content = content
             .child(div().w_full().h(px(1.0)).bg(palette.list_divider))
@@ -1360,30 +1419,256 @@ impl Render for LauncherView {
 }
 
 impl LauncherView {
+    /// Replaces the normal results+preview workspace while emoji search mode
+    /// is active — its own text input row (bound to `TextInputTarget::EmojiSearch`,
+    /// same wiring as the bowl-editor panel above) plus a list of glyph/name
+    /// candidates from `emoji::search_emojis`.
+    fn render_emoji_search_workspace(
+        &mut self,
+        palette: Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let emoji_focus_handle = self.text_input_focus_handle(TextInputTarget::EmojiSearch);
+        let emoji_focused = emoji_focus_handle.is_focused(window);
+
+        let emoji_input = div()
+            .w_full()
+            .px_2()
+            .pt(px(4.0))
+            .pb(px(2.0))
+            .rounded_md()
+            .line_height(px(30.0))
+            .text_base()
+            .font_weight(FontWeight::NORMAL)
+            .flex()
+            .items_center()
+            .gap_2()
+            .key_context("PastaTextInput")
+            .track_focus(&emoji_focus_handle)
+            .cursor(CursorStyle::IBeam)
+            .on_action(cx.listener(Self::query_backspace))
+            .on_action(cx.listener(Self::query_delete_word_backward))
+            // Left/Right are intentionally not bound here — in the grid,
+            // they move the emoji selection instead of the text cursor
+            // (see handle_emoji_search_keystroke), so binding the usual
+            // cursor-movement actions on the same keys would fire both.
+            .on_action(cx.listener(Self::query_select_all))
+            .on_action(cx.listener(Self::query_home))
+            .on_action(cx.listener(Self::query_end))
+            .on_action(cx.listener(Self::query_show_character_palette))
+            .on_action(cx.listener(Self::query_paste))
+            .on_action(cx.listener(Self::query_cut))
+            .on_action(cx.listener(Self::query_copy))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.text_input_on_mouse_down(TextInputTarget::EmojiSearch, event, window, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.text_input_on_mouse_up(TextInputTarget::EmojiSearch, event, window, cx);
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.text_input_on_mouse_up(TextInputTarget::EmojiSearch, event, window, cx);
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event, window, cx| {
+                this.text_input_on_mouse_move(TextInputTarget::EmojiSearch, event, window, cx);
+            }));
+        let _ = emoji_focused;
+
+        let emoji_input_row = div().w_full().child(
+            emoji_input
+                .child(
+                    svg()
+                        .path("icons/search.svg")
+                        .size(px(14.0))
+                        .flex_shrink_0()
+                        .text_color(palette.muted_text),
+                )
+                .child(div().flex_1().min_w(px(0.0)).child(TextInputElement::new(
+                    cx.entity(),
+                    TextInputTarget::EmojiSearch,
+                    "Search emoji",
+                    palette,
+                    true,
+                ))),
+        );
+
+        let result_count = self.emoji_search_results.len();
+        let results = if result_count == 0 {
+            div()
+                .id("emoji-results-list")
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(palette.muted_text)
+                .text_sm()
+                .child("No emoji found.")
+                .into_any_element()
+        } else {
+            let selected_index = self.emoji_search_selected_index;
+            let row_count = result_count.div_ceil(EMOJI_GRID_COLUMNS);
+            uniform_list(
+                "emoji-results-list",
+                row_count,
+                cx.processor(move |this, range: Range<usize>, _window, cx| {
+                    let mut rows = Vec::with_capacity(range.end.saturating_sub(range.start));
+                    for row in range {
+                        rows.push(this.render_emoji_grid_row(row, selected_index, palette, cx));
+                    }
+                    rows
+                }),
+            )
+            .w_full()
+            .h_full()
+            .track_scroll(self.emoji_results_scroll.clone())
+            .into_any_element()
+        };
+
+        div()
+            .w_full()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(emoji_input_row)
+            .child(
+                div()
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .pt(px(4.0))
+                    .pb(px(12.0))
+                    .overflow_hidden()
+                    .child(results),
+            )
+            .into_any_element()
+    }
+
+    /// One virtualized `uniform_list` row of the emoji grid — up to
+    /// `EMOJI_GRID_COLUMNS` tiles, each an equal relative share of the
+    /// row's width so the tile count doesn't depend on measuring the
+    /// panel's actual pixel width.
+    fn render_emoji_grid_row(
+        &self,
+        row: usize,
+        selected_index: usize,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let start = row * EMOJI_GRID_COLUMNS;
+        let end = (start + EMOJI_GRID_COLUMNS).min(self.emoji_search_results.len());
+
+        let mut tiles = div()
+            .id(("emoji-row", row as u64))
+            .w_full()
+            .h(px(56.0))
+            .flex();
+        for position in start..end {
+            let Some(&entry_index) = self.emoji_search_results.get(position) else {
+                continue;
+            };
+            tiles = tiles.child(self.render_emoji_tile(
+                position,
+                entry_index,
+                selected_index,
+                palette,
+                cx,
+            ));
+        }
+        tiles.into_any_element()
+    }
+
+    fn render_emoji_tile(
+        &self,
+        position: usize,
+        entry_index: usize,
+        selected_index: usize,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some((glyph, _name)) = emoji::entry_at(entry_index) else {
+            return div().into_any_element();
+        };
+        let is_selected = position == selected_index;
+
+        let mut tile = div()
+            .id(("emoji-tile", position as u64))
+            .w(relative(1.0 / EMOJI_GRID_COLUMNS as f32))
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.emoji_search_selected_index = position;
+                this.copy_selected_emoji(cx);
+            }));
+        if is_selected {
+            tile = tile
+                .border_2()
+                .border_color(palette.selected_border)
+                .bg(palette.selected_bg);
+        } else {
+            tile = tile.hover({
+                let row_hover = palette.row_hover_bg;
+                move |style| style.bg(row_hover)
+            });
+        }
+
+        tile.child(div().text_size(px(26.0)).child(glyph.to_owned()))
+            .into_any_element()
+    }
+
     /// The permanent bottom bar. It names the primary action for the current
     /// selection and an always-available Commands entry, both with keycaps, so
     /// the app reads as keyboard-first before a key is pressed.
     fn render_action_bar(&self, palette: Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        let (primary_label, primary_key) = match self.items.get(self.selected_index) {
-            Some(item)
-                if item.item_type == ClipboardItemType::Password
-                    && self.is_secret_masked(item.id) =>
-            {
-                (
-                    "Reveal",
-                    if cfg!(target_os = "macos") {
-                        "⌘R"
-                    } else {
-                        "Ctrl+R"
-                    },
-                )
+        let (primary_label, primary_key) = if self.emoji_search_active {
+            ("Copy", "↵")
+        } else {
+            match self.items.get(self.selected_index) {
+                Some(item)
+                    if item.item_type == ClipboardItemType::Password
+                        && self.is_secret_masked(item.id) =>
+                {
+                    (
+                        "Reveal",
+                        if cfg!(target_os = "macos") {
+                            "⌘R"
+                        } else {
+                            "Ctrl+R"
+                        },
+                    )
+                }
+                _ => ("Copy", "↵"),
             }
-            _ => ("Copy", "↵"),
         };
         let commands_key = if cfg!(target_os = "macos") {
             "⌘H"
         } else {
             "Ctrl+H"
+        };
+        let status_label: SharedString = if self.emoji_search_active {
+            self.emoji_search_results
+                .get(self.emoji_search_selected_index)
+                .copied()
+                .and_then(emoji::entry_at)
+                .map(|(_, name)| SharedString::from(name.to_owned()))
+                .unwrap_or_else(|| SharedString::from("Emoji picker"))
+        } else {
+            SharedString::from("Clipboard history")
         };
 
         div()
@@ -1413,7 +1698,7 @@ impl LauncherView {
                         div()
                             .text_size(px(12.0))
                             .text_color(palette.muted_text)
-                            .child("Clipboard history"),
+                            .child(status_label),
                     ),
             )
             .child(
@@ -1613,7 +1898,11 @@ impl LauncherView {
                     .w_full()
                     .text_xs()
                     .text_color(palette.muted_text)
-                    .child(format!("{} · {}", image.mime_type, format_image_metadata(image))),
+                    .child(format!(
+                        "{} · {}",
+                        image.mime_type,
+                        format_image_metadata(image)
+                    )),
             );
         }
 
@@ -1710,16 +1999,12 @@ impl LauncherView {
             .into_any_element()
         } else if let Some(image) = &item.image {
             pane.child(
-                div()
-                    .w_full()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(
-                        img(image.path.clone())
-                            .w_full()
-                            .h_full()
-                            .object_fit(ObjectFit::Contain),
-                    ),
+                div().w_full().flex_1().min_h(px(0.0)).child(
+                    img(image.path.clone())
+                        .w_full()
+                        .h_full()
+                        .object_fit(ObjectFit::Contain),
+                ),
             )
             .into_any_element()
         } else {
