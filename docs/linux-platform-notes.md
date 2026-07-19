@@ -25,6 +25,8 @@ GPUI's Linux/X11 support is much younger than its macOS path, and several things
 
 Everything is best-effort: any failure returns and leaves GPUI's default behavior. It's a no-op on Wayland (the compositor owns placement there). The `x11rb` dependency was already in the tree via GPUI, so adding it as a direct dep pulls nothing new.
 
+**Known gap: it still misses intermittently (observed ~1 in 5 launches).** The window lookup in step 1 runs on our own X11 connection, separate from the one GPUI used to create the window. There's no ordering guarantee between the two — occasionally our `query_tree` runs before GPUI's `CreateWindow`/resize has reached the server, so the launcher either isn't in the tree yet or hasn't reached its final size (the size match tolerates only a couple of pixels). On a miss, the lookup silently returns and Mutter's top-left placement wins for that launch. This is a genuine race, not a logic bug — retried lookups reduce it but don't eliminate the underlying non-determinism. If you want centering guaranteed rather than best-effort, see the GNOME workaround below.
+
 ## Blur is KDE-Wayland-only
 
 `try_apply_kde_wayland_blur` uses the KWin protocol `org_kde_kwin_blur`. It early-returns unless the session is Wayland **and** the compositor is KWin (the blur-manager bind fails otherwise). So blur only appears on **KDE Plasma + Wayland**. On X11 (any DE) or GNOME/wlroots Wayland it silently does nothing. This is a compositor limitation, not a missing setting — worth stating plainly since the README advertises blur without that caveat.
@@ -55,7 +57,7 @@ Things that will waste your time if you don't know them:
 - **Finding the launcher window with no `wmctrl`/`xdotool`.** Only `xwininfo` and `xprop` are available. The launcher has **no `WM_CLASS` and no name**, so match it by size: `xwininfo -root -tree | grep 'has no name.*1720x1120'` (1720×1120 = 860×560 at 2× scale). Confirm position with `xwininfo -id <id>` → `Absolute upper-left X/Y`. Centered on a 2560×1600 screen is `~422,240`.
 - **Persisted config overrides code defaults.** UI settings live at `~/.config/PastaClipboard/ui-style.json`. A value saved there (e.g. `pasta_brain_enabled`) wins over any changed code default, so flipping a default only affects fresh installs — existing installs need the JSON edited or the tray toggle used.
 - **Binary vs package name.** The binary is `pasta-launcher` (dev: `target/debug/pasta-launcher`; installed: `~/.local/bin/pasta-launcher`). The `.deb` *package* is named `pasta` (`[package.metadata.deb]`), but the binary inside is still `pasta-launcher`.
-- **GNOME workaround for placement.** `gsettings set org.gnome.mutter center-new-windows true` makes Mutter center all new windows — a zero-code way to confirm the placement diagnosis, but it's global to every app. The in-app fix above makes this unnecessary.
+- **GNOME workaround for placement.** `gsettings set org.gnome.mutter center-new-windows true` makes Mutter center all new windows itself — a zero-code way to confirm the placement diagnosis, and, because the in-app fix has a known intermittent miss (see "Known gap" above), currently the more reliable fix if a user still sees top-left placement. The trade-off: it's global to every app on the desktop, not scoped to Pasta, so we deliberately don't set it programmatically — it's a setting for the user to opt into, not something Pasta should change on their behalf.
 
 ## Reference: a representative dev environment
 
