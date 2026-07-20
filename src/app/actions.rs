@@ -86,6 +86,7 @@ impl LauncherView {
             transform_menu_open: false,
             qr_preview: None,
             blur_close_armed: false,
+            pending_blur_hide_at: None,
             suppress_auto_hide: false,
             suppress_auto_hide_until: None,
             pinned: false,
@@ -148,6 +149,7 @@ impl LauncherView {
         self.transform_menu_open = false;
         self.qr_preview = None;
         self.blur_close_armed = false;
+        self.pending_blur_hide_at = None;
         self.suppress_auto_hide = false;
         self.suppress_auto_hide_until = None;
         self.pinned = false;
@@ -411,6 +413,42 @@ impl LauncherView {
 
     pub(crate) fn can_copy_secret_now(&self, item_id: i64) -> bool {
         !self.is_secret_masked(item_id) && self.revealed_secret_id == Some(item_id)
+    }
+
+    /// Window activation changed. Gaining focus arms the auto-hide and cancels
+    /// any hide the previous blur scheduled; losing it schedules one rather than
+    /// hiding outright, so a window-manager focus bounce (see
+    /// `BLUR_HIDE_DEBOUNCE_MS`) can be taken back before we tear the window down.
+    pub(crate) fn note_window_activation(&mut self, active: bool) {
+        if active {
+            self.blur_close_armed = true;
+            self.pending_blur_hide_at = None;
+            return;
+        }
+        if !self.blur_close_armed || self.blur_hide_suppressed() {
+            return;
+        }
+        self.pending_blur_hide_at =
+            Some(Instant::now() + Duration::from_millis(BLUR_HIDE_DEBOUNCE_MS));
+    }
+
+    /// True once a scheduled auto-hide has gone unclaimed for the full debounce
+    /// and the window is still unfocused. Polled from the transition loop.
+    pub(crate) fn blur_hide_due(&mut self, window_active: bool) -> bool {
+        let Some(due) = self.pending_blur_hide_at else {
+            return false;
+        };
+        // Focus came back, or something started suppressing the hide (a file
+        // picker, a Touch ID prompt, the pin toggle) after it was scheduled.
+        if window_active || self.blur_hide_suppressed() {
+            self.pending_blur_hide_at = None;
+            return false;
+        }
+        if Instant::now() < due {
+            return false;
+        }
+        self.pending_blur_hide_at = None;
+        true
     }
 
     pub(crate) fn blur_hide_suppressed(&mut self) -> bool {

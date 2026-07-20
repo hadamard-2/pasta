@@ -103,6 +103,14 @@ const WINDOW_OPEN_DURATION_MS: u64 = 120;
 #[cfg(not(target_os = "linux"))]
 const WINDOW_CLOSE_DURATION_MS: u64 = 95;
 const WINDOW_CLOSE_EARLY_EXIT_ALPHA: f32 = 0.08;
+/// How long a focus loss must persist before the launcher auto-hides. A window
+/// manager can briefly bounce focus away right after the launcher maps — GNOME
+/// does this when it releases the keyboard grab it holds for its `overlay-key`
+/// while Super is down — and focus returns on its own a moment later. Closing on
+/// the first blur event turned that bounce into an instant self-destruct for
+/// launches from a Super-based shortcut. Waiting this out costs nothing on a
+/// genuine click-away, which stays blurred.
+const BLUR_HIDE_DEBOUNCE_MS: u64 = 220;
 const RESULT_ROW_HEIGHT: f32 = 40.0;
 const RESULTS_LIST_WIDTH_RATIO: f32 = 0.47;
 const PREVIEW_SETTLE_DELAY_MS: u64 = 80;

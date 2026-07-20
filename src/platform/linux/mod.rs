@@ -1246,17 +1246,7 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
                 try_apply_kde_wayland_blur(window);
 
                 cx.observe_window_activation(window, |view: &mut LauncherView, window, cx| {
-                    if window.is_window_active() {
-                        view.blur_close_armed = true;
-                        return;
-                    }
-                    if !view.blur_close_armed {
-                        return;
-                    }
-                    if view.blur_hide_suppressed() {
-                        return;
-                    }
-                    view.begin_close_transition(LauncherExitIntent::Hide);
+                    view.note_window_activation(window.is_window_active());
                     cx.notify();
                 })
                 .detach();

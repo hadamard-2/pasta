@@ -127,17 +127,7 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
                     cx,
                 );
                 cx.observe_window_activation(window, |_view: &mut LauncherView, window, cx| {
-                    if window.is_window_active() {
-                        _view.blur_close_armed = true;
-                        return;
-                    }
-                    if !_view.blur_close_armed {
-                        return;
-                    }
-                    if _view.blur_hide_suppressed() {
-                        return;
-                    }
-                    _view.begin_close_transition(LauncherExitIntent::Hide);
+                    _view.note_window_activation(window.is_window_active());
                     cx.notify();
                 })
                 .detach();

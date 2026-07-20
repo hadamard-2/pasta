@@ -320,6 +320,13 @@ pub(crate) fn spawn_launcher_transition_loop(cx: &mut App) {
                     .and_then(|state| state.window)
                 {
                     let _ = window.update(cx, |view, window, cx| {
+                        // A blur scheduled an auto-hide; fire it only if focus
+                        // never came back within the debounce.
+                        if view.blur_hide_due(window.is_window_active()) {
+                            view.begin_close_transition(LauncherExitIntent::Hide);
+                            cx.notify();
+                        }
+
                         let reveal_changed = view.clear_expired_secret_reveal();
                         let reveal_tick_changed = view.secret_countdown_tick_changed();
                         let caret_blink_changed =
