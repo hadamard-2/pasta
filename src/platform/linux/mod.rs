@@ -1806,7 +1806,42 @@ fn current_clipboard_signature() -> Option<String> {
         .map(|text| format!("text:{}", clipboard_text_hash(&text)))
         .unwrap_or_else(|| "text:none".to_owned());
 
-    Some(format!("{mime_signature};{text_signature}"))
+    // Non-text payloads (screenshots, other images, arbitrary binary formats)
+    // don't show up in `text_signature`, and their advertised mime types stay
+    // identical from one copy to the next (e.g. every screenshot offers the
+    // same "image/png" target). Without hashing the actual bytes, two
+    // different back-to-back screenshots look like the same clipboard state
+    // and the second one is silently skipped.
+    let content_signature = primary_content_mime_type(&mime_types)
+        .and_then(|mime| read_clipboard_bytes(&mime))
+        .map(|bytes| format!("content:{}", clipboard_bytes_hash(&bytes)))
+        .unwrap_or_else(|| "content:none".to_owned());
+
+    Some(format!(
+        "{mime_signature};{text_signature};{content_signature}"
+    ))
+}
+
+/// Picks the mime type whose bytes should be hashed to detect content
+/// changes that a text-only comparison would miss (images, other binary
+/// clipboard formats). Skips `text/*` since `text_signature` already covers
+/// it, and skips pseudo-targets like `TARGETS`/`TIMESTAMP` that have no `/`.
+fn primary_content_mime_type(mime_types: &[String]) -> Option<String> {
+    mime_types
+        .iter()
+        .find(|mime| mime.contains('/') && !mime.starts_with("text/"))
+        .cloned()
+}
+
+fn read_clipboard_bytes(mime_type: &str) -> Option<Vec<u8>> {
+    if command_exists("xclip") {
+        return read_via_command_bytes(
+            "xclip",
+            &["-selection", "clipboard", "-t", mime_type, "-o"],
+        );
+    }
+
+    None
 }
 
 fn read_clipboard_mime_types() -> Vec<String> {
@@ -1893,6 +1928,17 @@ fn read_via_command(program: &str, args: &[&str]) -> Option<String> {
         return None;
     }
     String::from_utf8(output.stdout).ok()
+}
+
+fn read_via_command_bytes(program: &str, args: &[&str]) -> Option<Vec<u8>> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(output.stdout)
 }
 
 fn write_via_command(program: &str, args: &[&str], value: &str) -> Result<(), String> {
