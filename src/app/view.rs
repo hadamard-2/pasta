@@ -1660,6 +1660,12 @@ impl LauncherView {
         } else {
             "Ctrl+H"
         };
+        let pin_key = if cfg!(target_os = "macos") {
+            "⌘⇧P"
+        } else {
+            "Ctrl+Shift+P"
+        };
+        let pin_label = if self.pinned { "Unpin" } else { "Pin" };
         let status_label: SharedString = if self.emoji_search_active {
             self.emoji_search_results
                 .get(self.emoji_search_selected_index)
@@ -1667,6 +1673,8 @@ impl LauncherView {
                 .and_then(emoji::entry_at)
                 .map(|(_, name)| SharedString::from(name.to_owned()))
                 .unwrap_or_else(|| SharedString::from("Emoji picker"))
+        } else if self.pinned {
+            SharedString::from("Pinned — won't auto-hide")
         } else {
             SharedString::from("Clipboard history")
         };
@@ -1718,6 +1726,30 @@ impl LauncherView {
                                     .child(primary_label),
                             )
                             .child(primary_keycap(primary_key, palette)),
+                    )
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(palette.list_divider))
+                    .child(
+                        div()
+                            .id("action-bar-pin")
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.pinned = !this.pinned;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(if self.pinned {
+                                        palette.accent
+                                    } else {
+                                        palette.row_text
+                                    })
+                                    .child(pin_label),
+                            )
+                            .child(keycap(pin_key, palette)),
                     )
                     .child(div().w(px(1.0)).h(px(16.0)).bg(palette.list_divider))
                     .child(
@@ -2255,6 +2287,7 @@ fn command_help_tips() -> Vec<&'static str> {
             "↹ autocomplete",
             "⌘⇧S secret",
             "⌘D delete",
+            "⌘⇧P pin",
             "Esc close",
             "⌘Q quit",
             "⌘H hide help",
@@ -2277,6 +2310,7 @@ fn command_help_tips() -> Vec<&'static str> {
             "↹ autocomplete",
             "Ctrl+⇧S secret",
             "Ctrl+D delete",
+            "Ctrl+⇧P pin",
             "Esc close",
             "Ctrl+Q quit",
             "Ctrl+H hide help",

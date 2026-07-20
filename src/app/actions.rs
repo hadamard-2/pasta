@@ -88,6 +88,7 @@ impl LauncherView {
             blur_close_armed: false,
             suppress_auto_hide: false,
             suppress_auto_hide_until: None,
+            pinned: false,
             show_command_help: false,
             caret_visible: true,
             caret_blink_due_at: Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS),
@@ -149,6 +150,7 @@ impl LauncherView {
         self.blur_close_armed = false;
         self.suppress_auto_hide = false;
         self.suppress_auto_hide_until = None;
+        self.pinned = false;
         self.show_command_help = false;
         self.emoji_search_active = false;
         self.emoji_search_input_state.reset();
@@ -412,6 +414,9 @@ impl LauncherView {
     }
 
     pub(crate) fn blur_hide_suppressed(&mut self) -> bool {
+        if self.pinned {
+            return true;
+        }
         if self.suppress_auto_hide {
             return true;
         }
@@ -2566,6 +2571,11 @@ impl LauncherView {
             }
             "p" if action_mod && !modifiers.shift && !modifiers.alt && !modifiers.function => {
                 self.start_parameter_editor_for_selected(cx);
+                return;
+            }
+            "p" if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function => {
+                self.pinned = !self.pinned;
+                cx.notify();
                 return;
             }
             "i" if action_mod && !modifiers.shift && !modifiers.alt && !modifiers.function => {

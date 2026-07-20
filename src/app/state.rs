@@ -249,6 +249,7 @@ pub(crate) struct LauncherView {
     pub(crate) blur_close_armed: bool,
     pub(crate) suppress_auto_hide: bool,
     pub(crate) suppress_auto_hide_until: Option<Instant>,
+    pub(crate) pinned: bool,
     pub(crate) show_command_help: bool,
     pub(crate) caret_visible: bool,
     pub(crate) caret_blink_due_at: Instant,
