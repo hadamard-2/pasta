@@ -1607,6 +1607,119 @@ fn primary_monitor_rect(conn: &impl x11rb::connection::Connection, root: u32) ->
 /// unmapped window on the X server by matching GPUI's `_NET_WM_PID` stamp (our
 /// process) and its device size (which distinguishes it from any other window
 /// — e.g. the 1x1 background-anchor window — that shares our PID).
+/// Find our freshly-created launcher window on the X server by matching GPUI's
+/// `_NET_WM_PID` stamp and the window's device size. The size check is what
+/// distinguishes it from the other windows sharing our PID (the 1x1
+/// background anchor, GPUI's 2x2 notification window).
+fn find_launcher_x_window(
+    conn: &impl x11rb::connection::Connection,
+    root: u32,
+    pid_atom: u32,
+    our_pid: u32,
+    want_w: i32,
+    want_h: i32,
+) -> Option<u32> {
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
+
+    let children = conn
+        .query_tree(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())?
+        .children;
+
+    children.into_iter().find(|&child| {
+        let Some(geometry) = conn
+            .get_geometry(child)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            return false;
+        };
+        // Tolerate off-by-one from fractional-scale rounding.
+        if (geometry.width as i32 - want_w).abs() > 2
+            || (geometry.height as i32 - want_h).abs() > 2
+        {
+            return false;
+        }
+        let pid = conn
+            .get_property(false, child, pid_atom, AtomEnum::CARDINAL, 0, 1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|reply| reply.value32().and_then(|mut values| values.next()));
+        pid == Some(our_pid)
+    })
+}
+
+/// Keep the launcher out of the dock, the window switcher and the pager.
+///
+/// GPUI creates the launcher as a plain window: no `_NET_WM_WINDOW_TYPE`, so
+/// window managers treat it as `_NET_WM_WINDOW_TYPE_NORMAL` and list it as a
+/// running app — on GNOME that means a dock entry, with a generic icon since
+/// the window also carries no `WM_CLASS`. `_NET_WM_STATE_SKIP_TASKBAR` and
+/// `_NET_WM_STATE_SKIP_PAGER` are the EWMH way to opt out of that while staying
+/// an ordinary focusable window; this is the Linux counterpart to
+/// `NSApplicationActivationPolicyAccessory` on macOS.
+///
+/// Set before the window is mapped, so the window manager reads it as part of
+/// the initial map rather than us having to ask it to change state afterwards.
+/// Deliberately *not* done by switching GPUI to `WindowKind::PopUp`: that sets
+/// `_NET_WM_WINDOW_TYPE_NOTIFICATION`, which also forces always-on-top stacking
+/// and lets the window manager refuse keyboard focus — fatal for a launcher
+/// whose whole job is to be typed into.
+fn set_skip_taskbar_and_pager(conn: &impl x11rb::connection::Connection, root: u32, win: u32) {
+    // intern_atom/send_event come from the xproto extension trait,
+    // change_property32 from the wrapper one; both are needed here.
+    use x11rb::protocol::xproto::{
+        AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, PropMode,
+    };
+    use x11rb::wrapper::ConnectionExt as _;
+
+    let atom = |name: &[u8]| {
+        conn.intern_atom(false, name)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.atom)
+            .filter(|&atom| atom != 0)
+    };
+
+    let (Some(state), Some(skip_taskbar), Some(skip_pager)) = (
+        atom(b"_NET_WM_STATE"),
+        atom(b"_NET_WM_STATE_SKIP_TASKBAR"),
+        atom(b"_NET_WM_STATE_SKIP_PAGER"),
+    ) else {
+        return;
+    };
+
+    // Two routes, because we cannot be sure which side of the map we are on.
+    // Writing the property directly is what the window manager reads at map
+    // time, but it is ignored once the window is already mapped — and the
+    // retrying lookup above can easily take us past that point. For the mapped
+    // case EWMH requires asking the window manager to change the state via a
+    // _NET_WM_STATE client message to the root. Doing both is harmless: the
+    // client message is dropped for an unmapped window, and the property write
+    // is redundant (not conflicting) once the message has been honoured.
+    //
+    // REPLACE is safe: the window is new, so nothing else has put state on it
+    // yet (the window manager adds its own, e.g. _FOCUSED, later).
+    let _ = conn.change_property32(
+        PropMode::REPLACE,
+        win,
+        state,
+        AtomEnum::ATOM,
+        &[skip_taskbar, skip_pager],
+    );
+
+    // data = [action, first property, second property, source indication, 0];
+    // action 1 = _NET_WM_STATE_ADD, source 1 = normal application.
+    let message = ClientMessageEvent::new(32, win, state, [1, skip_taskbar, skip_pager, 1, 0]);
+    let _ = conn.send_event(
+        false,
+        root,
+        EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
+        message,
+    );
+}
+
 fn center_window_on_primary(window: &Window, want_width: f32, want_height: f32) {
     use x11rb::connection::Connection;
     use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
@@ -1640,40 +1753,27 @@ fn center_window_on_primary(window: &Window, want_width: f32, want_height: f32) 
     };
     let our_pid = std::process::id();
 
-    let children = match conn
-        .query_tree(root)
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-    {
-        Some(reply) => reply.children,
-        None => return,
-    };
-
-    let launcher = children.into_iter().find(|&child| {
-        let Some(geometry) = conn
-            .get_geometry(child)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-        else {
-            return false;
-        };
-        // Tolerate off-by-one from fractional-scale rounding.
-        if (geometry.width as i32 - want_w).abs() > 2
-            || (geometry.height as i32 - want_h).abs() > 2
-        {
-            return false;
+    // The lookup runs on our own X11 connection, which has no ordering
+    // guarantee against the one GPUI created the window on: sometimes our
+    // query_tree beats GPUI's CreateWindow (or its final resize) to the server
+    // and finds nothing. Retry briefly instead of giving up on the first miss —
+    // losing this race means both an off-centre window and a stray dock entry.
+    let mut launcher = None;
+    for attempt in 0..12 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(3));
         }
-        let pid = conn
-            .get_property(false, child, pid_atom, AtomEnum::CARDINAL, 0, 1)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .and_then(|reply| reply.value32().and_then(|mut values| values.next()));
-        pid == Some(our_pid)
-    });
+        launcher = find_launcher_x_window(&conn, root, pid_atom, our_pid, want_w, want_h);
+        if launcher.is_some() {
+            break;
+        }
+    }
 
     let Some(win) = launcher else {
         return;
     };
+
+    set_skip_taskbar_and_pager(&conn, root, win);
 
     let (mx, my, mw, mh) = primary_monitor_rect(&conn, root).unwrap_or((
         0,
