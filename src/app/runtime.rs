@@ -647,7 +647,9 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                     && !snapshot.is_transient
                 {
                     let should_ignore = cx
-                        .update(|cx| should_ignore_self_clipboard_write(cx, snapshot.text.as_bytes()))
+                        .update(|cx| {
+                            should_ignore_self_clipboard_write(cx, snapshot.text.as_bytes())
+                        })
                         .unwrap_or(false);
                     if should_ignore {
                         continue;
@@ -741,7 +743,9 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                     && !snapshot.is_transient
                 {
                     let should_ignore = cx
-                        .update(|cx| should_ignore_self_clipboard_write(cx, snapshot.text.as_bytes()))
+                        .update(|cx| {
+                            should_ignore_self_clipboard_write(cx, snapshot.text.as_bytes())
+                        })
                         .unwrap_or(false);
                     if should_ignore {
                         continue;

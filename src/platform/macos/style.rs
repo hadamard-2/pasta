@@ -102,8 +102,7 @@ pub(crate) fn load_embedded_ui_font(cx: &mut App) {
         eprintln!("warning: unable to load embedded fonts: {err}");
     }
 
-    let ui_font_family =
-        resolve_font_family(cx, &["Geist"]).unwrap_or_else(|| "Geist".into());
+    let ui_font_family = resolve_font_family(cx, &["Geist"]).unwrap_or_else(|| "Geist".into());
     let content_font_family = resolve_font_family(cx, &["Geist Mono", "GeistMono"])
         .unwrap_or_else(|| "Geist Mono".into());
     cx.set_global(load_ui_style_state(ui_font_family, content_font_family));

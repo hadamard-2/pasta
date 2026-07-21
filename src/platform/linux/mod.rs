@@ -1066,8 +1066,7 @@ pub(crate) fn load_embedded_ui_font(cx: &mut App) {
         eprintln!("warning: unable to load embedded fonts: {err}");
     }
 
-    let ui_font_family =
-        resolve_font_family(cx, &["Geist"]).unwrap_or_else(|| "Geist".into());
+    let ui_font_family = resolve_font_family(cx, &["Geist"]).unwrap_or_else(|| "Geist".into());
     let content_font_family = resolve_font_family(cx, &["Geist Mono", "GeistMono"])
         .unwrap_or_else(|| "Geist Mono".into());
     cx.set_global(load_ui_style_state(ui_font_family, content_font_family));
@@ -1566,10 +1565,18 @@ fn add_rounded_blur_region(region: &WlRegion, width: i32, height: i32, radius: i
 
 /// Primary monitor rectangle (x, y, width, height) in device pixels via RandR.
 /// Returns `None` if RandR has no primary output or the query fails.
-fn primary_monitor_rect(conn: &impl x11rb::connection::Connection, root: u32) -> Option<(i32, i32, i32, i32)> {
+fn primary_monitor_rect(
+    conn: &impl x11rb::connection::Connection,
+    root: u32,
+) -> Option<(i32, i32, i32, i32)> {
     use x11rb::protocol::randr::ConnectionExt as _;
 
-    let primary = conn.randr_get_output_primary(root).ok()?.reply().ok()?.output;
+    let primary = conn
+        .randr_get_output_primary(root)
+        .ok()?
+        .reply()
+        .ok()?
+        .output;
     let resources = conn
         .randr_get_screen_resources_current(root)
         .ok()?
@@ -1636,8 +1643,7 @@ fn find_launcher_x_window(
             return false;
         };
         // Tolerate off-by-one from fractional-scale rounding.
-        if (geometry.width as i32 - want_w).abs() > 2
-            || (geometry.height as i32 - want_h).abs() > 2
+        if (geometry.width as i32 - want_w).abs() > 2 || (geometry.height as i32 - want_h).abs() > 2
         {
             return false;
         }
