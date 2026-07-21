@@ -418,22 +418,36 @@ pub(crate) fn write_clipboard_text(value: &str) {
     eprintln!("warning: no supported Linux clipboard backend found");
 }
 
-/// Wayland-only counterpart to [`write_clipboard_text`] for image bytes: GPUI's
-/// window is destroyed on hide, so a background wl-clipboard-rs writer keeps
-/// serving paste requests after that. X11 doesn't need this — GPUI's own X11
-/// client already implements `write_to_clipboard` for images natively.
+/// Counterpart to [`write_clipboard_text`] for image bytes. On Wayland,
+/// GPUI's window is destroyed on hide, so a background wl-clipboard-rs writer
+/// keeps serving paste requests after that. On X11, GPUI's `write_to_clipboard`
+/// (gpui 0.2.2) always calls `set_text` regardless of clipboard item kind, so
+/// image copies are silently dropped there too — `xclip` (which forks and
+/// keeps serving the selection in the background) fills that gap.
 pub(crate) fn write_clipboard_image_bytes(bytes: &[u8], mime_type: &str) {
-    if !is_wayland_session() {
+    if is_wayland_session() {
+        let options = CopyOptions::new();
+        if let Err(err) = options.copy(
+            Source::Bytes(bytes.to_vec().into_boxed_slice()),
+            CopyMimeType::Specific(mime_type.to_owned()),
+        ) {
+            eprintln!("warning: failed to copy image to Wayland clipboard: {err}");
+        }
         return;
     }
 
-    let options = CopyOptions::new();
-    if let Err(err) = options.copy(
-        Source::Bytes(bytes.to_vec().into_boxed_slice()),
-        CopyMimeType::Specific(mime_type.to_owned()),
-    ) {
-        eprintln!("warning: failed to copy image to Wayland clipboard: {err}");
+    if command_exists("xclip") {
+        if let Err(err) = write_via_command_bytes(
+            "xclip",
+            &["-selection", "clipboard", "-t", mime_type],
+            bytes,
+        ) {
+            eprintln!("warning: failed to copy image to clipboard with xclip: {err}");
+        }
+        return;
     }
+
+    eprintln!("warning: no supported Linux clipboard backend found for image copy");
 }
 
 pub(crate) fn read_clipboard_text() -> Option<String> {
@@ -1948,6 +1962,10 @@ fn read_via_command_bytes(program: &str, args: &[&str]) -> Option<Vec<u8>> {
 }
 
 fn write_via_command(program: &str, args: &[&str], value: &str) -> Result<(), String> {
+    write_via_command_bytes(program, args, value.as_bytes())
+}
+
+fn write_via_command_bytes(program: &str, args: &[&str], value: &[u8]) -> Result<(), String> {
     let mut child = std::process::Command::new(program)
         .args(args)
         .stdin(std::process::Stdio::piped())
@@ -1958,9 +1976,7 @@ fn write_via_command(program: &str, args: &[&str], value: &str) -> Result<(), St
         .stdin
         .take()
         .ok_or_else(|| "missing stdin pipe".to_owned())?;
-    stdin
-        .write_all(value.as_bytes())
-        .map_err(|err| err.to_string())?;
+    stdin.write_all(value).map_err(|err| err.to_string())?;
     drop(stdin);
 
     let status = child.wait().map_err(|err| err.to_string())?;
