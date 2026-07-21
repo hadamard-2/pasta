@@ -588,6 +588,11 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn main() {
+    // Silent unless RUST_LOG is set — lets us capture cosmic-text's font-fallback
+    // tracing (e.g. `RUST_LOG=cosmic_text::shape=trace`) when diagnosing emoji
+    // rendering without adding noise to normal runs.
+    env_logger::init();
+
     // Single-instance guard + external trigger. Any launch first tries to take
     // the instance lock. If another instance already holds it, hand off by
     // asking it to open its launcher over the trigger socket — this covers both
