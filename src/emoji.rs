@@ -1,7 +1,12 @@
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 
-use crate::neural_embed::NeuralEmbedder;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::neural_embed::{self, NeuralEmbedder};
 use crate::storage::{cosine_similarity, semantic_tokenize};
 
 /// Unicode CLDR English annotations (SPDX Unicode-3.0), used only to enrich
@@ -131,10 +136,10 @@ pub(crate) fn search_emojis(
     let query_lower = query.to_ascii_lowercase();
     let query_terms = semantic_tokenize(query);
 
-    let mut scored: Vec<(f32, usize)> = match embedder {
-        Some(embedder) => {
+    let mut scored: Vec<(f32, usize)> = embedder
+        .and_then(|embedder| {
             let query_embedding = embedder.embed(query, &query_terms);
-            with_corpus_embeddings(embedder, |corpus_embeddings| {
+            with_corpus_embeddings(|corpus_embeddings: &[Vec<f32>]| {
                 EMOJI_ENTRIES
                     .iter()
                     .enumerate()
@@ -148,18 +153,10 @@ pub(crate) fn search_emojis(
                         };
                         (score > 0.05).then_some((score, index))
                     })
-                    .collect()
+                    .collect::<Vec<(f32, usize)>>()
             })
-        }
-        None => EMOJI_ENTRIES
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                let lexical = lexical_emoji_score(entry, &query_lower, &query_terms);
-                (lexical > 0.0).then_some((lexical, index))
-            })
-            .collect(),
-    };
+        })
+        .unwrap_or_else(|| lexical_only_scores(&query_lower, &query_terms));
 
     scored.sort_by(|left, right| {
         right
@@ -171,6 +168,17 @@ pub(crate) fn search_emojis(
         .into_iter()
         .take(limit)
         .map(|(_, index)| index)
+        .collect()
+}
+
+fn lexical_only_scores(query_lower: &str, query_terms: &[String]) -> Vec<(f32, usize)> {
+    EMOJI_ENTRIES
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let lexical = lexical_emoji_score(entry, query_lower, query_terms);
+            (lexical > 0.0).then_some((lexical, index))
+        })
         .collect()
 }
 
@@ -194,19 +202,141 @@ fn lexical_emoji_score(entry: &EmojiEntry, query_lower: &str, query_terms: &[Str
     score
 }
 
-/// Computes (once) and caches the corpus's neural embeddings for the
-/// process lifetime — cheap to hold in memory (~3-4k short vectors) and
-/// avoids re-embedding thousands of static strings on every keystroke.
-fn with_corpus_embeddings<R>(embedder: &NeuralEmbedder, f: impl FnOnce(&[Vec<f32>]) -> R) -> R {
-    let mut guard = CORPUS_EMBEDDINGS
+/// Reads the cached corpus embeddings if `prewarm_corpus_embeddings` has
+/// already populated them, without blocking to compute them — a query typed
+/// before the background prewarm finishes just falls back to lexical-only
+/// scoring for that one keystroke instead of stalling the UI thread.
+fn with_corpus_embeddings<R>(f: impl FnOnce(&[Vec<f32>]) -> R) -> Option<R> {
+    let guard = CORPUS_EMBEDDINGS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if guard.is_none() {
-        let embeddings = EMOJI_ENTRIES
-            .iter()
-            .map(|entry| embedder.embed(&entry.name, &entry.keywords))
-            .collect();
-        *guard = Some(embeddings);
+    guard.as_ref().map(|embeddings| f(embeddings))
+}
+
+/// Populates the corpus embedding cache — from an on-disk cache when one
+/// matches the current model/corpus, otherwise via a batched inference call
+/// (see `NeuralEmbedder::embed_batch`) whose result is then written to disk
+/// for next launch. Call this once, off the UI thread, right after the
+/// neural embedder finishes initializing (see `spawn_neural_init`) — without
+/// it, the first non-empty emoji search of a session would otherwise pay for
+/// ~1,900 sequential, synchronous embedding calls on the UI thread (multiple
+/// seconds).
+pub(crate) fn prewarm_corpus_embeddings(embedder: &NeuralEmbedder) {
+    if let Some(cached) = load_cached_corpus_embeddings() {
+        *CORPUS_EMBEDDINGS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(cached);
+        return;
     }
-    f(guard.as_ref().unwrap())
+
+    let Some(embeddings) = embedder.embed_batch(
+        EMOJI_ENTRIES
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.keywords.as_slice())),
+    ) else {
+        // Leave the cache unpopulated so `search_emojis` degrades to
+        // lexical-only for this session, and leave nothing on disk so a
+        // transient failure (e.g. an ORT hiccup) gets retried next launch
+        // instead of being trusted forever as a "valid" empty cache.
+        return;
+    };
+    save_corpus_embeddings_to_cache(&embeddings);
+    *CORPUS_EMBEDDINGS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(embeddings);
+}
+
+#[derive(Serialize, Deserialize)]
+struct CorpusEmbeddingCacheMeta {
+    model_version: String,
+    corpus_fingerprint: String,
+}
+
+fn corpus_embedding_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("pasta-launcher")
+        .join("emoji-embeddings")
+}
+
+/// Fingerprints the corpus content that actually feeds the embedder (name +
+/// keywords per entry) so an on-disk cache can be invalidated if a future
+/// `emojis`/CLDR-annotations update changes what gets embedded.
+fn corpus_fingerprint() -> String {
+    let mut hasher = Sha256::new();
+    for entry in EMOJI_ENTRIES.iter() {
+        hasher.update(entry.name.as_bytes());
+        hasher.update(b"\0");
+        for keyword in &entry.keywords {
+            hasher.update(keyword.as_bytes());
+            hasher.update(b"\0");
+        }
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// Loads corpus embeddings from disk if a cache exists and its metadata
+/// matches the current model version and corpus fingerprint; `None` on any
+/// mismatch, missing file, or malformed content, so the caller just falls
+/// back to recomputing — a stale or corrupt cache should never be trusted.
+fn load_cached_corpus_embeddings() -> Option<Vec<Vec<f32>>> {
+    let dir = corpus_embedding_cache_dir();
+    let meta_bytes = fs::read(dir.join("meta.json")).ok()?;
+    let meta: CorpusEmbeddingCacheMeta = serde_json::from_slice(&meta_bytes).ok()?;
+    if meta.model_version != neural_embed::MODEL_VERSION
+        || meta.corpus_fingerprint != corpus_fingerprint()
+    {
+        return None;
+    }
+
+    let blob = fs::read(dir.join("embeddings.bin")).ok()?;
+    let bytes_per_row = neural_embed::NEURAL_VECTOR_DIM * 4;
+    if bytes_per_row == 0 || blob.len() % bytes_per_row != 0 {
+        return None;
+    }
+    if blob.len() / bytes_per_row != EMOJI_ENTRIES.len() {
+        return None;
+    }
+
+    Some(
+        blob.chunks_exact(bytes_per_row)
+            .map(|row| {
+                row.chunks_exact(4)
+                    .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+/// Writes the embeddings blob first and the metadata sidecar last — the
+/// sidecar is the "this cache is valid" marker, so if the process dies
+/// mid-save, either the sidecar still points at the old (untouched) blob or
+/// it isn't written at all; both cases fail validation cleanly on next load
+/// instead of trusting a half-written blob under a freshly-written sidecar.
+fn save_corpus_embeddings_to_cache(embeddings: &[Vec<f32>]) {
+    let dir = corpus_embedding_cache_dir();
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+
+    let mut blob = Vec::with_capacity(embeddings.len() * neural_embed::NEURAL_VECTOR_DIM * 4);
+    for vector in embeddings {
+        for value in vector {
+            blob.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    if fs::write(dir.join("embeddings.bin"), blob).is_err() {
+        return;
+    }
+
+    let meta = CorpusEmbeddingCacheMeta {
+        model_version: neural_embed::MODEL_VERSION.to_owned(),
+        corpus_fingerprint: corpus_fingerprint(),
+    };
+    let Ok(meta_json) = serde_json::to_vec(&meta) else {
+        return;
+    };
+    let _ = fs::write(dir.join("meta.json"), meta_json);
 }

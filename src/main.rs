@@ -42,8 +42,8 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, ObjectFit, PaintQuad, Pixels, Point, Render, ScrollStrategy,
     ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle,
     UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, actions,
-    div, fill, img, point, prelude::*, px, relative, rgb, rgba, size, uniform_list,
+    WindowKind, WindowOptions, actions, div, fill, img, point, prelude::*, px, relative, rgb, rgba,
+    size, uniform_list,
 };
 #[cfg(target_os = "macos")]
 use objc::rc::StrongPtr;
@@ -455,7 +455,8 @@ pub(crate) fn spawn_neural_init(storage: Arc<ClipboardStorage>) {
             eprintln!("info: initializing neural embedder (may download model on first run)...");
             match neural_embed::NeuralEmbedder::try_new() {
                 Ok(embedder) => {
-                    storage.set_neural_embedder(Arc::new(embedder));
+                    let embedder = Arc::new(embedder);
+                    storage.set_neural_embedder(embedder.clone());
                     if let Ok(mut status) = NEURAL_STATUS.lock() {
                         *status = NeuralStatus::Ready;
                     }
@@ -466,6 +467,11 @@ pub(crate) fn spawn_neural_init(storage: Arc<ClipboardStorage>) {
                             "Model downloaded. Semantic search is ready.",
                         );
                     }
+                    // Runs after the Ready signal so emoji-corpus warmup (a
+                    // niche feature) never delays the primary neural-ready
+                    // notification/tray relabel; search_emojis degrades to
+                    // lexical-only until this finishes.
+                    emoji::prewarm_corpus_embeddings(&embedder);
                 }
                 Err(err) => {
                     if let Ok(mut status) = NEURAL_STATUS.lock() {
