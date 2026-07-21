@@ -123,112 +123,167 @@ impl Render for LauncherView {
             panel = panel.shadow_xl();
         }
 
-        let mut content = div()
-            .flex_1()
-            .min_h(px(0.0))
-            .px_3()
-            .pt_2()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child({
-                let mut query_container = div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .pt(px(4.0))
-                    .pb(px(2.0))
-                    .rounded_md()
-                    .line_height(px(30.0))
-                    .text_base()
-                    .font_weight(FontWeight::NORMAL);
+        let mut content =
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .px_3()
+                .pt_2()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child({
+                    let mut query_container = div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        // Emoji mode's back button sits flush with the divider
+                        // below instead of at the search field's usual inset.
+                        .pl(if self.emoji_search_active {
+                            px(0.0)
+                        } else {
+                            px(8.0)
+                        })
+                        .pr(px(8.0))
+                        .pt(px(4.0))
+                        .pb(px(2.0))
+                        .rounded_md()
+                        .line_height(px(30.0))
+                        .text_base()
+                        .font_weight(FontWeight::NORMAL);
 
-                if query_input_enabled {
-                    query_container = query_container
-                        .key_context("PastaTextInput")
-                        .track_focus(&query_focus_handle)
-                        .cursor(CursorStyle::IBeam)
-                        .on_action(cx.listener(Self::query_backspace))
-                        .on_action(cx.listener(Self::query_delete_word_backward))
-                        .on_action(cx.listener(Self::query_left))
-                        .on_action(cx.listener(Self::query_right))
-                        .on_action(cx.listener(Self::query_select_left))
-                        .on_action(cx.listener(Self::query_select_right))
-                        .on_action(cx.listener(Self::query_select_all))
-                        .on_action(cx.listener(Self::query_home))
-                        .on_action(cx.listener(Self::query_end))
-                        .on_action(cx.listener(Self::query_show_character_palette))
-                        .on_action(cx.listener(Self::query_paste))
-                        .on_action(cx.listener(Self::query_cut))
-                        .on_action(cx.listener(Self::query_copy))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event, window, cx| {
-                                this.text_input_on_mouse_down(
+                    if query_input_enabled {
+                        query_container = query_container
+                            .key_context("PastaTextInput")
+                            .track_focus(&query_focus_handle)
+                            .cursor(CursorStyle::IBeam)
+                            .on_action(cx.listener(Self::query_backspace))
+                            .on_action(cx.listener(Self::query_delete_word_backward))
+                            .on_action(cx.listener(Self::query_select_all))
+                            .on_action(cx.listener(Self::query_home))
+                            .on_action(cx.listener(Self::query_end))
+                            .on_action(cx.listener(Self::query_show_character_palette))
+                            .on_action(cx.listener(Self::query_paste))
+                            .on_action(cx.listener(Self::query_cut))
+                            .on_action(cx.listener(Self::query_copy))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event, window, cx| {
+                                    this.text_input_on_mouse_down(
+                                        TextInputTarget::Query,
+                                        event,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|this, event, window, cx| {
+                                    this.text_input_on_mouse_up(
+                                        TextInputTarget::Query,
+                                        event,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .on_mouse_up_out(
+                                MouseButton::Left,
+                                cx.listener(|this, event, window, cx| {
+                                    this.text_input_on_mouse_up(
+                                        TextInputTarget::Query,
+                                        event,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .on_mouse_move(cx.listener(|this, event, window, cx| {
+                                this.text_input_on_mouse_move(
                                     TextInputTarget::Query,
                                     event,
                                     window,
                                     cx,
                                 );
-                            }),
-                        )
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(|this, event, window, cx| {
-                                this.text_input_on_mouse_up(
-                                    TextInputTarget::Query,
-                                    event,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .on_mouse_up_out(
-                            MouseButton::Left,
-                            cx.listener(|this, event, window, cx| {
-                                this.text_input_on_mouse_up(
-                                    TextInputTarget::Query,
-                                    event,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .on_mouse_move(cx.listener(|this, event, window, cx| {
-                            this.text_input_on_mouse_move(
-                                TextInputTarget::Query,
-                                event,
-                                window,
-                                cx,
-                            );
-                        }));
-                }
+                            }));
 
-                // The search field sits directly on the canvas — no border, no
-                // background fill, focused or not (section 4 of the design system).
-                let _ = query_focused;
+                        // Left/Right (plain or Shift-extended) normally move/extend
+                        // the text cursor, but in emoji search mode they move the
+                        // grid selection instead (see `handle_emoji_search_keystroke`)
+                        // — binding both would fire the cursor move and the grid
+                        // move on every press.
+                        if !self.emoji_search_active {
+                            query_container = query_container
+                                .on_action(cx.listener(Self::query_left))
+                                .on_action(cx.listener(Self::query_right))
+                                .on_action(cx.listener(Self::query_select_left))
+                                .on_action(cx.listener(Self::query_select_right));
+                        }
+                    }
 
-                div().w_full().child(
-                    query_container
-                        .child(
+                    // The search field sits directly on the canvas — no border, no
+                    // background fill, focused or not (section 4 of the design system).
+                    let _ = query_focused;
+
+                    if self.emoji_search_active {
+                        query_container = query_container.child(
+                            div()
+                                .id("emoji-mode-back")
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(32.0))
+                                .h(px(32.0))
+                                .rounded_md()
+                                .border_1()
+                                .border_color(palette.window_border)
+                                .bg(palette.row_hover_bg)
+                                .cursor_pointer()
+                                .hover({
+                                    let selected_bg = palette.selected_bg;
+                                    move |style| style.bg(selected_bg)
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.cancel_emoji_search(cx);
+                                }))
+                                .child(
+                                    svg()
+                                        .path("icons/chevron-left.svg")
+                                        .size(px(18.0))
+                                        .text_color(palette.title_text),
+                                ),
+                        );
+                    } else {
+                        query_container = query_container.child(
                             svg()
                                 .path("icons/search.svg")
                                 .size(px(14.0))
                                 .flex_shrink_0()
                                 .text_color(palette.muted_text),
-                        )
-                        .child(div().flex_1().min_w(px(0.0)).child(TextInputElement::new(
+                        );
+                    }
+
+                    div().w_full().child(query_container.child(
+                        div().flex_1().min_w(px(0.0)).child(TextInputElement::new(
                             cx.entity(),
                             TextInputTarget::Query,
-                            "Pasta",
+                            if self.emoji_search_active {
+                                "Search emoji"
+                            } else {
+                                "Pasta"
+                            },
                             palette,
                             query_input_enabled,
-                        ))),
-                )
-            });
-        if !self.tag_search_suggestions.is_empty() && query_input_enabled {
+                        )),
+                    ))
+                });
+        if !self.tag_search_suggestions.is_empty()
+            && query_input_enabled
+            && !self.emoji_search_active
+        {
             content = content.child(self.render_tag_search_suggestions(palette, cx));
         }
 
@@ -1455,87 +1510,15 @@ impl Render for LauncherView {
 
 impl LauncherView {
     /// Replaces the normal results+preview workspace while emoji search mode
-    /// is active — its own text input row (bound to `TextInputTarget::EmojiSearch`,
-    /// same wiring as the bowl-editor panel above) plus a list of glyph/name
-    /// candidates from `emoji::search_emojis`.
+    /// is active — a grid of glyph/name candidates from `emoji::search_emojis`.
+    /// The search input itself is the main query row above (see the "Emoji"
+    /// chip logic in `render`), not a separate field.
     fn render_emoji_search_workspace(
         &mut self,
         palette: Palette,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let emoji_focus_handle = self.text_input_focus_handle(TextInputTarget::EmojiSearch);
-        let emoji_focused = emoji_focus_handle.is_focused(window);
-
-        let emoji_input = div()
-            .w_full()
-            .px_2()
-            .pt(px(4.0))
-            .pb(px(2.0))
-            .rounded_md()
-            .line_height(px(30.0))
-            .text_base()
-            .font_weight(FontWeight::NORMAL)
-            .flex()
-            .items_center()
-            .gap_2()
-            .key_context("PastaTextInput")
-            .track_focus(&emoji_focus_handle)
-            .cursor(CursorStyle::IBeam)
-            .on_action(cx.listener(Self::query_backspace))
-            .on_action(cx.listener(Self::query_delete_word_backward))
-            // Left/Right are intentionally not bound here — in the grid,
-            // they move the emoji selection instead of the text cursor
-            // (see handle_emoji_search_keystroke), so binding the usual
-            // cursor-movement actions on the same keys would fire both.
-            .on_action(cx.listener(Self::query_select_all))
-            .on_action(cx.listener(Self::query_home))
-            .on_action(cx.listener(Self::query_end))
-            .on_action(cx.listener(Self::query_show_character_palette))
-            .on_action(cx.listener(Self::query_paste))
-            .on_action(cx.listener(Self::query_cut))
-            .on_action(cx.listener(Self::query_copy))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event, window, cx| {
-                    this.text_input_on_mouse_down(TextInputTarget::EmojiSearch, event, window, cx);
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, event, window, cx| {
-                    this.text_input_on_mouse_up(TextInputTarget::EmojiSearch, event, window, cx);
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, event, window, cx| {
-                    this.text_input_on_mouse_up(TextInputTarget::EmojiSearch, event, window, cx);
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, event, window, cx| {
-                this.text_input_on_mouse_move(TextInputTarget::EmojiSearch, event, window, cx);
-            }));
-        let _ = emoji_focused;
-
-        let emoji_input_row = div().w_full().child(
-            emoji_input
-                .child(
-                    svg()
-                        .path("icons/search.svg")
-                        .size(px(14.0))
-                        .flex_shrink_0()
-                        .text_color(palette.muted_text),
-                )
-                .child(div().flex_1().min_w(px(0.0)).child(TextInputElement::new(
-                    cx.entity(),
-                    TextInputTarget::EmojiSearch,
-                    "Search emoji",
-                    palette,
-                    true,
-                ))),
-        );
-
         let result_count = self.emoji_search_results.len();
         let results = if result_count == 0 {
             div()
@@ -1576,7 +1559,6 @@ impl LauncherView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(emoji_input_row)
             .child(
                 div()
                     .w_full()

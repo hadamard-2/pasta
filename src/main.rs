@@ -228,7 +228,6 @@ enum TextInputTarget {
     BowlEditor,
     ParameterName,
     ParameterFill,
-    EmojiSearch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

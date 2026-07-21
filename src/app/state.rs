@@ -255,8 +255,6 @@ pub(crate) struct LauncherView {
     pub(crate) caret_visible: bool,
     pub(crate) caret_blink_due_at: Instant,
     pub(crate) emoji_search_active: bool,
-    pub(crate) emoji_search_input_state: TextInputState,
-    pub(crate) emoji_search_query: String,
     pub(crate) emoji_search_results: Vec<usize>,
     pub(crate) emoji_search_selected_index: usize,
     pub(crate) emoji_results_scroll: UniformListScrollHandle,

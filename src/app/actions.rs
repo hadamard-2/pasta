@@ -94,8 +94,6 @@ impl LauncherView {
             caret_visible: true,
             caret_blink_due_at: Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS),
             emoji_search_active: false,
-            emoji_search_input_state: TextInputState::new(cx),
-            emoji_search_query: String::new(),
             emoji_search_results: Vec::new(),
             emoji_search_selected_index: 0,
             emoji_results_scroll: UniformListScrollHandle::new(),
@@ -155,8 +153,6 @@ impl LauncherView {
         self.pinned = false;
         self.show_command_help = false;
         self.emoji_search_active = false;
-        self.emoji_search_input_state.reset();
-        self.emoji_search_query.clear();
         self.emoji_search_results.clear();
         self.emoji_search_selected_index = 0;
         self.begin_search_generation();
@@ -193,6 +189,11 @@ impl LauncherView {
     }
 
     pub(crate) fn query_did_change(&mut self, cx: &mut Context<Self>) {
+        if self.emoji_search_active {
+            self.refresh_emoji_search_results();
+            cx.notify();
+            return;
+        }
         let selection_changed = self.selected_index != 0;
         self.selected_index = 0;
         self.last_query_edit_at = Some(Instant::now());
@@ -772,21 +773,25 @@ impl LauncherView {
 
     pub(crate) fn enter_emoji_search_mode(&mut self, cx: &mut Context<Self>) {
         self.emoji_search_active = true;
-        self.emoji_search_query.clear();
-        self.emoji_search_input_state.reset();
+        self.query.clear();
+        self.query_input_state.reset();
+        self.tag_search_suggestions.clear();
         self.refresh_emoji_search_results();
-        self.queue_text_input_focus(TextInputTarget::EmojiSearch);
+        self.queue_text_input_focus(TextInputTarget::Query);
         cx.notify();
     }
 
+    /// Clears the emoji chip and query text, then re-runs the normal search
+    /// pipeline so the list view behind it reflects the now-empty query
+    /// instead of showing stale emoji-mode state.
     pub(crate) fn cancel_emoji_search(&mut self, cx: &mut Context<Self>) {
         self.emoji_search_active = false;
-        self.emoji_search_query.clear();
-        self.emoji_search_input_state.reset();
+        self.query.clear();
+        self.query_input_state.reset();
         self.emoji_search_results.clear();
         self.emoji_search_selected_index = 0;
         self.queue_text_input_focus(TextInputTarget::Query);
-        cx.notify();
+        self.query_did_change(cx);
     }
 
     pub(crate) fn refresh_emoji_search_results(&mut self) {
@@ -795,8 +800,7 @@ impl LauncherView {
         } else {
             None
         };
-        self.emoji_search_results =
-            emoji::search_emojis(&self.emoji_search_query, embedder.as_deref(), 40);
+        self.emoji_search_results = emoji::search_emojis(&self.query, embedder.as_deref(), 40);
         self.emoji_search_selected_index = 0;
         self.emoji_results_scroll
             .scroll_to_item(0, ScrollStrategy::Center);
