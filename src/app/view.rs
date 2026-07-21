@@ -1605,6 +1605,12 @@ impl LauncherView {
                 cx,
             ));
         }
+        // Pad a short trailing row with invisible spacers so the real tiles
+        // keep the same `flex_1` share of the row width as a full row,
+        // instead of stretching to fill the space the missing tiles left.
+        for _ in (end - start)..EMOJI_GRID_COLUMNS {
+            tiles = tiles.child(div().flex_1().min_w(px(0.0)).h(px(72.0)));
+        }
         tiles.into_any_element()
     }
 
