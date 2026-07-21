@@ -12,6 +12,41 @@ use gpui::{AnyElement, StatefulInteractiveElement, canvas, hsla, size, svg};
 /// the panel's actual pixel width to decide how many tiles fit.
 pub(crate) const EMOJI_GRID_COLUMNS: usize = 10;
 
+/// The visual for a single emoji tile. On Linux the glyph is rendered from its
+/// bundled Noto Color Emoji PNG (keyed by codepoints joined with `-`, served by
+/// `Assets`), which sidesteps cosmic-text/GPUI's color-emoji font-fallback
+/// limitations; a missing image falls back to the text glyph. Other platforms
+/// render the text glyph directly, since they draw color emoji natively.
+fn emoji_tile_glyph(glyph: &str) -> AnyElement {
+    #[cfg(target_os = "linux")]
+    {
+        let key = glyph
+            .chars()
+            .map(|c| format!("{:x}", c as u32))
+            .collect::<Vec<_>>()
+            .join("-");
+        let fallback_glyph = glyph.to_owned();
+        img(format!("emoji/{key}.png"))
+            .w(px(40.0))
+            .h(px(40.0))
+            .object_fit(ObjectFit::Contain)
+            .with_fallback(move || {
+                div()
+                    .text_size(px(28.0))
+                    .child(fallback_glyph.clone())
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        div()
+            .text_size(px(28.0))
+            .child(glyph.to_owned())
+            .into_any_element()
+    }
+}
+
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_pending_text_input_focus(window);
@@ -1572,8 +1607,10 @@ impl LauncherView {
         let mut tiles = div()
             .id(("emoji-row", row as u64))
             .w_full()
-            .h(px(56.0))
-            .flex();
+            .h(px(84.0))
+            .flex()
+            .items_center()
+            .gap_x(px(6.0));
         for position in start..end {
             let Some(&entry_index) = self.emoji_search_results.get(position) else {
                 continue;
@@ -1602,14 +1639,25 @@ impl LauncherView {
         };
         let is_selected = position == selected_index;
 
+        // Each tile fills its flex slot as a near-square chip carrying the
+        // highlight/hover. Row `gap_x` handles horizontal spacing and the row
+        // being taller than the tile handles vertical spacing — so both gaps
+        // are small explicit values rather than whatever's left over from
+        // floating a small square in a full-width column.
         let mut tile = div()
             .id(("emoji-tile", position as u64))
-            .w(relative(1.0 / EMOJI_GRID_COLUMNS as f32))
-            .h_full()
+            .flex_1()
+            .min_w(px(0.0))
+            .h(px(72.0))
             .flex()
             .items_center()
             .justify_center()
             .rounded_md()
+            // Reserve the 2px selection ring on every tile (transparent when
+            // unselected) so moving the selection only recolors the border
+            // rather than resizing the tile and shifting the grid.
+            .border_2()
+            .border_color(hsla(0.0, 0.0, 0.0, 0.0))
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.emoji_search_selected_index = position;
@@ -1617,7 +1665,6 @@ impl LauncherView {
             }));
         if is_selected {
             tile = tile
-                .border_2()
                 .border_color(palette.selected_border)
                 .bg(palette.selected_bg);
         } else {
@@ -1627,8 +1674,7 @@ impl LauncherView {
             });
         }
 
-        tile.child(div().text_size(px(26.0)).child(glyph.to_owned()))
-            .into_any_element()
+        tile.child(emoji_tile_glyph(glyph)).into_any_element()
     }
 
     /// The permanent bottom bar. It names the primary action for the current

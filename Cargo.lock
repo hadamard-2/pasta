@@ -4410,6 +4410,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "rusqlite",
+ "rust-embed",
  "serde",
  "serde_json",
  "serde_yaml",
