@@ -351,6 +351,7 @@ impl LauncherView {
         match target {
             TextInputTarget::Query => &self.query_input_state,
             TextInputTarget::InfoEditor => &self.info_editor_input_state,
+            TextInputTarget::NameEditor => &self.name_editor_input_state,
             TextInputTarget::TagEditor => &self.tag_editor_input_state,
             TextInputTarget::BowlEditor => &self.bowl_editor_input_state,
             TextInputTarget::ParameterName => &self.parameter_name_input_state,
@@ -362,6 +363,7 @@ impl LauncherView {
         match target {
             TextInputTarget::Query => &mut self.query_input_state,
             TextInputTarget::InfoEditor => &mut self.info_editor_input_state,
+            TextInputTarget::NameEditor => &mut self.name_editor_input_state,
             TextInputTarget::TagEditor => &mut self.tag_editor_input_state,
             TextInputTarget::BowlEditor => &mut self.bowl_editor_input_state,
             TextInputTarget::ParameterName => &mut self.parameter_name_input_state,
@@ -373,6 +375,7 @@ impl LauncherView {
         match target {
             TextInputTarget::Query => &self.query,
             TextInputTarget::InfoEditor => &self.info_editor_input,
+            TextInputTarget::NameEditor => &self.name_editor_input,
             TextInputTarget::TagEditor => &self.tag_editor_input,
             TextInputTarget::BowlEditor => &self.bowl_editor_input,
             TextInputTarget::ParameterName => self
@@ -418,6 +421,7 @@ impl LauncherView {
         match target {
             TextInputTarget::Query => self.query = content,
             TextInputTarget::InfoEditor => self.info_editor_input = content,
+            TextInputTarget::NameEditor => self.name_editor_input = content,
             TextInputTarget::TagEditor => self.tag_editor_input = content,
             TextInputTarget::BowlEditor => self.bowl_editor_input = content,
             TextInputTarget::ParameterName => {
@@ -459,6 +463,7 @@ impl LauncherView {
         match target {
             TextInputTarget::Query => self.query_input_enabled(),
             TextInputTarget::InfoEditor => self.info_editor_target_id.is_some(),
+            TextInputTarget::NameEditor => self.name_editor_target_id.is_some(),
             TextInputTarget::TagEditor => self.tag_editor_target_id.is_some(),
             TextInputTarget::BowlEditor => self.bowl_editor_target_id.is_some(),
             TextInputTarget::ParameterName => {
@@ -475,6 +480,7 @@ impl LauncherView {
     fn active_text_input_target(&self, window: &Window) -> Option<TextInputTarget> {
         [
             TextInputTarget::InfoEditor,
+            TextInputTarget::NameEditor,
             TextInputTarget::TagEditor,
             TextInputTarget::BowlEditor,
             TextInputTarget::ParameterName,

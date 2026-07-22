@@ -113,18 +113,6 @@ pub(crate) fn type_color(item_type: ClipboardItemType, dark: bool) -> gpui::Hsla
     }
 }
 
-/// A single-glyph leading indicator per clipboard type, colored via
-/// [`type_color`]. Kept to plain ASCII so it renders in any bundled font.
-pub(crate) fn type_icon_glyph(item_type: ClipboardItemType) -> &'static str {
-    match item_type {
-        ClipboardItemType::Text => "T",
-        ClipboardItemType::Code => "#",
-        ClipboardItemType::Command => "$",
-        ClipboardItemType::Password => "*",
-        ClipboardItemType::Image => "I",
-    }
-}
-
 pub(crate) fn tag_chip_color(label: &str, dark: bool) -> gpui::Hsla {
     if label.starts_with("OPEN ") {
         if dark {

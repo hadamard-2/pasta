@@ -70,12 +70,19 @@ pub(crate) struct CachedRowPresentation {
 
 impl CachedRowPresentation {
     pub(crate) fn from_record(item: &ClipboardRecord) -> Self {
+        // A user-assigned name overrides the derived title everywhere it's shown.
+        let custom_name = item.name.trim();
         if let Some(image) = &item.image {
             // Image attachments have no meaningful text body — skip the
             // language/preview/title machinery built for text content.
             let metadata = format_image_metadata(image);
+            let title = if custom_name.is_empty() {
+                metadata.clone()
+            } else {
+                custom_name.to_owned()
+            };
             return Self {
-                title: metadata.clone(),
+                title,
                 created_label: format_timestamp(&item.created_at),
                 detected_language: None,
                 collapsed_preview: metadata.clone(),
@@ -93,7 +100,11 @@ impl CachedRowPresentation {
             bounded_preview_content(&expanded_preview_full, PREVIEW_PANE_TEXT_LIMIT);
         let expanded_preview_line_count = expanded_preview.lines().count();
         let collapsed_preview = preview_content(&item.content);
-        let title = single_line_title(&item.content, &collapsed_preview);
+        let title = if custom_name.is_empty() {
+            single_line_title(&item.content, &collapsed_preview)
+        } else {
+            custom_name.to_owned()
+        };
 
         Self {
             title,
@@ -195,6 +206,7 @@ pub(crate) struct LauncherView {
     pub(crate) pasta_brain_enabled: bool,
     pub(crate) query_input_state: TextInputState,
     pub(crate) info_editor_input_state: TextInputState,
+    pub(crate) name_editor_input_state: TextInputState,
     pub(crate) tag_editor_input_state: TextInputState,
     pub(crate) bowl_editor_input_state: TextInputState,
     pub(crate) parameter_name_input_state: TextInputState,
@@ -224,6 +236,9 @@ pub(crate) struct LauncherView {
     pub(crate) info_editor_target_id: Option<i64>,
     pub(crate) info_editor_input: String,
     pub(crate) info_editor_select_all: bool,
+    pub(crate) name_editor_target_id: Option<i64>,
+    pub(crate) name_editor_input: String,
+    pub(crate) name_editor_select_all: bool,
     pub(crate) tag_editor_target_id: Option<i64>,
     pub(crate) tag_editor_input: String,
     pub(crate) tag_editor_select_all: bool,
@@ -251,11 +266,15 @@ pub(crate) struct LauncherView {
     pub(crate) suppress_auto_hide: bool,
     pub(crate) suppress_auto_hide_until: Option<Instant>,
     pub(crate) pinned: bool,
-    pub(crate) show_command_help: bool,
+    /// Selected row within the `>`-triggered command palette (indexes the
+    /// filtered command list, separate from `selected_index` which stays on the
+    /// clipboard item the command will act upon).
+    pub(crate) command_palette_selected: usize,
     pub(crate) caret_visible: bool,
     pub(crate) caret_blink_due_at: Instant,
     pub(crate) emoji_search_active: bool,
     pub(crate) emoji_search_results: Vec<usize>,
     pub(crate) emoji_search_selected_index: usize,
     pub(crate) emoji_results_scroll: UniformListScrollHandle,
+    pub(crate) command_palette_scroll: UniformListScrollHandle,
 }

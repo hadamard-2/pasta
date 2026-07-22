@@ -224,6 +224,7 @@ enum ParameterEditorStage {
 enum TextInputTarget {
     Query,
     InfoEditor,
+    NameEditor,
     TagEditor,
     BowlEditor,
     ParameterName,

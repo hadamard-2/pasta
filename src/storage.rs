@@ -98,11 +98,16 @@ pub struct ClipboardRecord {
     pub id: i64,
     pub item_type: ClipboardItemType,
     pub content: String,
+    /// A user-assigned label. When non-empty it becomes the item's display
+    /// title in both the results list and the preview pane, in place of the
+    /// content-derived title.
+    pub name: String,
     pub description: String,
     pub tags: Vec<String>,
     pub parameters: Vec<ClipboardParameter>,
     pub created_at: String,
     pub image: Option<ImageAttachment>,
+    pub pin_order: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -503,6 +508,22 @@ impl ClipboardStorage {
         let mut ranked = Vec::new();
         let mut lexical_hits = 0_usize;
 
+        let mut pinned_ids: HashSet<i64> = HashSet::new();
+        if effective_query.is_empty() {
+            let mut pinned_records: Vec<&ClipboardRecord> = index
+                .by_id
+                .values()
+                .map(|indexed| &indexed.record)
+                .filter(|record| record.pin_order.is_some())
+                .collect();
+            pinned_records.sort_unstable_by_key(|record| record.pin_order);
+            for record in pinned_records {
+                pinned_ids.insert(record.id);
+                output.push(record.clone());
+            }
+        }
+        let mut tail_count = 0_usize;
+
         for id in &index.order_desc_ids {
             if is_canceled() {
                 return Ok(Vec::new());
@@ -513,8 +534,12 @@ impl ClipboardStorage {
             let record = &indexed.record;
 
             if effective_query.is_empty() {
+                if pinned_ids.contains(id) {
+                    continue;
+                }
                 output.push(record.clone());
-                if output.len() >= limit {
+                tail_count += 1;
+                if tail_count >= limit {
                     break;
                 }
                 continue;
@@ -1018,6 +1043,81 @@ impl ClipboardStorage {
         Ok(true)
     }
 
+    pub fn set_item_pinned(&self, id: i64, pinned: bool) -> Result<bool> {
+        let conn = self.open()?;
+        let existing: Option<Option<i64>> = conn
+            .query_row(
+                "SELECT pin_order FROM clipboard_items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(existing_pin_order) = existing else {
+            return Ok(false);
+        };
+        if pinned == existing_pin_order.is_some() {
+            return Ok(false);
+        }
+
+        let next_pin_order = if pinned {
+            let min_pin_order: Option<i64> = conn.query_row(
+                "SELECT MIN(pin_order) FROM clipboard_items WHERE pin_order IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )?;
+            Some(min_pin_order.map(|order| order - 1).unwrap_or(0))
+        } else {
+            None
+        };
+
+        conn.execute(
+            "UPDATE clipboard_items SET pin_order = ?1 WHERE id = ?2",
+            params![next_pin_order, id],
+        )?;
+        self.sync_index_record_from_db(id)?;
+        Ok(true)
+    }
+
+    pub fn reorder_pinned_item(&self, id: i64, move_up: bool) -> Result<bool> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, pin_order FROM clipboard_items WHERE pin_order IS NOT NULL ORDER BY pin_order ASC",
+        )?;
+        let mut pinned: Vec<(i64, i64)> = Vec::new();
+        {
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                pinned.push((row.get(0)?, row.get(1)?));
+            }
+        }
+
+        let Some(position) = pinned.iter().position(|(pinned_id, _)| *pinned_id == id) else {
+            return Ok(false);
+        };
+        let neighbor_position = if move_up {
+            position.checked_sub(1)
+        } else {
+            position.checked_add(1).filter(|&pos| pos < pinned.len())
+        };
+        let Some(neighbor_position) = neighbor_position else {
+            return Ok(false);
+        };
+
+        let (item_id, item_order) = pinned[position];
+        let (neighbor_id, neighbor_order) = pinned[neighbor_position];
+        conn.execute(
+            "UPDATE clipboard_items SET pin_order = ?1 WHERE id = ?2",
+            params![neighbor_order, item_id],
+        )?;
+        conn.execute(
+            "UPDATE clipboard_items SET pin_order = ?1 WHERE id = ?2",
+            params![item_order, neighbor_id],
+        )?;
+        self.sync_index_record_from_db(item_id)?;
+        self.sync_index_record_from_db(neighbor_id)?;
+        Ok(true)
+    }
+
     pub fn items_in_bowl(&self, bowl_name: &str) -> Vec<ClipboardRecord> {
         let Some(normalized_bowl) = normalize_bowl_name(bowl_name) else {
             return Vec::new();
@@ -1154,6 +1254,32 @@ impl ClipboardStorage {
         Ok(true)
     }
 
+    pub fn upsert_item_name(&self, id: i64, name: &str) -> Result<bool> {
+        let normalized = name.trim().to_owned();
+        let conn = self.open()?;
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT name FROM clipboard_items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(existing) = existing else {
+            return Ok(false);
+        };
+
+        if existing == normalized {
+            return Ok(false);
+        }
+
+        conn.execute(
+            "UPDATE clipboard_items SET name = ?1 WHERE id = ?2",
+            params![normalized, id],
+        )?;
+        self.sync_index_record_from_db(id)?;
+        Ok(true)
+    }
+
     fn upsert_imported_bowl_item(&self, item: &BowlExportItem, bowl_name: &str) -> Result<bool> {
         let item_type = ClipboardItemType::from_str(item.item_type.trim());
         if item_type == ClipboardItemType::Password {
@@ -1262,6 +1388,42 @@ impl ClipboardStorage {
         self.ensure_parameters_column(&conn)?;
         self.ensure_description_column(&conn)?;
         self.ensure_image_columns(&conn)?;
+        self.ensure_pin_order_column(&conn)?;
+        self.ensure_name_column(&conn)?;
+        Ok(())
+    }
+
+    fn ensure_name_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(clipboard_items)")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "name" {
+                return Ok(());
+            }
+        }
+
+        conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN name TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+        Ok(())
+    }
+
+    fn ensure_pin_order_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(clipboard_items)")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "pin_order" {
+                return Ok(());
+            }
+        }
+
+        conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN pin_order INTEGER",
+            [],
+        )?;
         Ok(())
     }
 
@@ -1329,7 +1491,7 @@ impl ClipboardStorage {
         let conn = self.open()?;
         let mut stmt = conn.prepare(
             "SELECT id, item_type, content, is_encrypted, tags, parameters, description, created_at, content_hash,
-                    image_path, image_width, image_height, image_byte_size
+                    image_path, image_width, image_height, image_byte_size, pin_order, name
              FROM clipboard_items
              ORDER BY id DESC",
         )?;
@@ -1372,7 +1534,7 @@ impl ClipboardStorage {
         let result: Option<Option<IndexedRecord>> = conn
             .query_row(
                 "SELECT id, item_type, content, is_encrypted, tags, parameters, description, created_at, content_hash,
-                        image_path, image_width, image_height, image_byte_size
+                        image_path, image_width, image_height, image_byte_size, pin_order, name
                  FROM clipboard_items
                  WHERE id = ?1",
                 params![id],
@@ -1399,6 +1561,8 @@ impl ClipboardStorage {
         let image_width: Option<i64> = row.get(10)?;
         let image_height: Option<i64> = row.get(11)?;
         let image_byte_size: Option<i64> = row.get(12)?;
+        let pin_order: Option<i64> = row.get(13)?;
+        let name: String = row.get(14)?;
         let image = image_path.map(|path| {
             let path = PathBuf::from(path);
             let mime_type = mime_type_for_path(&path);
@@ -1422,7 +1586,21 @@ impl ClipboardStorage {
         let parameters: Vec<ClipboardParameter> =
             serde_json::from_str(&parameters_json).unwrap_or_default();
         let content_lower = content.to_lowercase();
-        let description_lower = description.to_lowercase();
+        // Fold the user-assigned name into the searchable description text so a
+        // named item is findable by its name, without disturbing the record's
+        // separate `description` field.
+        let description_lower = {
+            let mut combined = description.to_lowercase();
+            let name_lower = name.to_lowercase();
+            if !name_lower.is_empty() {
+                if combined.is_empty() {
+                    combined = name_lower;
+                } else {
+                    combined = format!("{name_lower} {combined}");
+                }
+            }
+            combined
+        };
         let fuzzy_search_text = if description_lower.is_empty() {
             bounded_text_prefix(&content_lower, SEARCH_FUZZY_TEXT_LIMIT).to_owned()
         } else {
@@ -1441,11 +1619,13 @@ impl ClipboardStorage {
                 id,
                 item_type,
                 content,
+                name,
                 description,
                 tags,
                 parameters,
                 created_at,
                 image,
+                pin_order,
             },
             content_hash,
             content_lower,
@@ -4179,6 +4359,8 @@ mod tests {
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
             image: None,
+            name: String::new(),
+            pin_order: None,
         };
 
         assert!(record_matches_query(&record, "stale container", false));
@@ -4198,6 +4380,8 @@ mod tests {
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
             image: None,
+            name: String::new(),
+            pin_order: None,
         };
 
         assert!(record_matches_query(&record, "needle-at-the-end", false));
@@ -4214,6 +4398,8 @@ mod tests {
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
             image: None,
+            name: String::new(),
+            pin_order: None,
         };
 
         assert!(record_matches_query(&record, "rs", true));
@@ -4232,6 +4418,8 @@ mod tests {
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
             image: None,
+            name: String::new(),
+            pin_order: None,
         };
 
         assert!(record_matches_query(&record, "yaml", true));
@@ -4390,6 +4578,249 @@ mod tests {
             "restored tags should not keep secret markers: {:?}",
             restored.tags
         );
+
+        let _ = fs::remove_file(&storage.db_path);
+    }
+
+    #[test]
+    fn upsert_item_name_persists_and_makes_item_findable_by_name() {
+        let storage = test_storage("item-name");
+        storage
+            .upsert_clipboard_item("kubectl get pods -n default")
+            .expect("seed item should insert");
+        let id = storage
+            .search_items("", 10, false, SearchExecution::Fast, 1, None)
+            .expect("should load inserted items")
+            .first()
+            .expect("expected inserted item")
+            .id;
+
+        assert!(
+            storage
+                .upsert_item_name(id, "  Prod pods  ")
+                .expect("naming should succeed")
+        );
+        assert!(
+            !storage
+                .upsert_item_name(id, "Prod pods")
+                .expect("re-naming with the same trimmed value is a no-op")
+        );
+
+        // The name is trimmed, stored, and surfaced on the record.
+        let named = storage
+            .search_items("", 10, false, SearchExecution::Fast, 2, None)
+            .expect("should load items")
+            .into_iter()
+            .find(|item| item.id == id)
+            .expect("item should still exist");
+        assert_eq!(named.name, "Prod pods");
+
+        // A named item is findable by a word from its name even though the
+        // word does not appear in the content.
+        let hits = storage
+            .search_items("prod", 10, false, SearchExecution::Fast, 3, None)
+            .expect("should search by name");
+        assert!(
+            hits.iter().any(|item| item.id == id),
+            "named item should match a query against its name"
+        );
+
+        // Clearing the name is allowed and reported as a change.
+        assert!(
+            storage
+                .upsert_item_name(id, "")
+                .expect("clearing the name should succeed")
+        );
+        let cleared = storage
+            .search_items("", 10, false, SearchExecution::Fast, 4, None)
+            .expect("should load items")
+            .into_iter()
+            .find(|item| item.id == id)
+            .expect("item should still exist");
+        assert!(cleared.name.is_empty());
+
+        let _ = fs::remove_file(&storage.db_path);
+    }
+
+    #[test]
+    fn pin_order_column_migration_is_idempotent() {
+        let storage = test_storage("pin-migration");
+        let conn = storage.open().expect("should open connection");
+        storage
+            .ensure_pin_order_column(&conn)
+            .expect("re-running the migration should be a no-op");
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(clipboard_items)")
+            .expect("should prepare pragma statement");
+        let mut rows = stmt.query([]).expect("should query pragma");
+        let mut found = false;
+        while let Some(row) = rows.next().expect("should read pragma row") {
+            let name: String = row.get(1).expect("should read column name");
+            if name == "pin_order" {
+                found = true;
+            }
+        }
+        assert!(found, "pin_order column should exist after migration");
+
+        let _ = fs::remove_file(&storage.db_path);
+    }
+
+    #[test]
+    fn set_item_pinned_toggles_and_is_idempotent() {
+        let storage = test_storage("pin-toggle");
+        storage
+            .upsert_clipboard_item("first")
+            .expect("seed item should insert");
+        let id = storage
+            .search_items("", 10, false, SearchExecution::Fast, 1, None)
+            .expect("should load inserted items")
+            .first()
+            .expect("expected inserted item")
+            .id;
+
+        assert!(
+            storage
+                .set_item_pinned(id, true)
+                .expect("pinning should succeed")
+        );
+        assert!(
+            !storage
+                .set_item_pinned(id, true)
+                .expect("pinning an already-pinned item is a no-op")
+        );
+        let pinned = storage
+            .search_items("", 10, false, SearchExecution::Fast, 2, None)
+            .expect("should load items")
+            .into_iter()
+            .find(|item| item.id == id)
+            .expect("item should still exist");
+        assert!(pinned.pin_order.is_some());
+
+        assert!(
+            storage
+                .set_item_pinned(id, false)
+                .expect("unpinning should succeed")
+        );
+        assert!(
+            !storage
+                .set_item_pinned(id, false)
+                .expect("unpinning an already-unpinned item is a no-op")
+        );
+        let unpinned = storage
+            .search_items("", 10, false, SearchExecution::Fast, 3, None)
+            .expect("should load items")
+            .into_iter()
+            .find(|item| item.id == id)
+            .expect("item should still exist");
+        assert!(unpinned.pin_order.is_none());
+
+        let _ = fs::remove_file(&storage.db_path);
+    }
+
+    #[test]
+    fn reorder_pinned_item_swaps_with_neighbor_and_noops_at_boundary() {
+        let storage = test_storage("pin-reorder");
+        for text in ["alpha", "beta", "gamma", "delta"] {
+            storage
+                .upsert_clipboard_item(text)
+                .expect("seed item should insert");
+        }
+        let seeded = storage
+            .search_items("", 10, false, SearchExecution::Fast, 1, None)
+            .expect("should load inserted items");
+        let id_of = |text: &str| {
+            seeded
+                .iter()
+                .find(|item| item.content == text)
+                .expect("seeded item should exist")
+                .id
+        };
+        let (alpha_id, beta_id, gamma_id, delta_id) = (
+            id_of("alpha"),
+            id_of("beta"),
+            id_of("gamma"),
+            id_of("delta"),
+        );
+
+        // Pin sequence puts the most-recently pinned item at the top.
+        storage
+            .set_item_pinned(alpha_id, true)
+            .expect("pin should succeed");
+        storage
+            .set_item_pinned(beta_id, true)
+            .expect("pin should succeed");
+        storage
+            .set_item_pinned(gamma_id, true)
+            .expect("pin should succeed");
+
+        let pinned_order = |storage: &ClipboardStorage| -> Vec<i64> {
+            storage
+                .search_items("", 10, false, SearchExecution::Fast, 2, None)
+                .expect("should load items")
+                .into_iter()
+                .filter(|item| item.pin_order.is_some())
+                .map(|item| item.id)
+                .collect()
+        };
+        assert_eq!(pinned_order(&storage), vec![gamma_id, beta_id, alpha_id]);
+
+        assert!(
+            storage
+                .reorder_pinned_item(beta_id, true)
+                .expect("reorder should succeed")
+        );
+        assert_eq!(pinned_order(&storage), vec![beta_id, gamma_id, alpha_id]);
+
+        assert!(
+            !storage
+                .reorder_pinned_item(beta_id, true)
+                .expect("moving the top pinned item up should be a no-op"),
+        );
+        assert!(
+            !storage
+                .reorder_pinned_item(alpha_id, false)
+                .expect("moving the bottom pinned item down should be a no-op"),
+        );
+        assert!(
+            !storage
+                .reorder_pinned_item(delta_id, true)
+                .expect("an unpinned item cannot be reordered"),
+        );
+
+        let _ = fs::remove_file(&storage.db_path);
+    }
+
+    #[test]
+    fn search_items_with_empty_query_lists_pinned_first_then_recent_up_to_limit() {
+        let storage = test_storage("pin-browse-order");
+        for text in ["one", "two", "three", "four", "five"] {
+            storage
+                .upsert_clipboard_item(text)
+                .expect("seed item should insert");
+        }
+        let seeded = storage
+            .search_items("", 10, false, SearchExecution::Fast, 1, None)
+            .expect("should load inserted items");
+        let one_id = seeded
+            .iter()
+            .find(|item| item.content == "one")
+            .expect("seeded item should exist")
+            .id;
+
+        // Pin the oldest item; it should still surface first even though it
+        // would otherwise fall outside a tight recency limit.
+        storage
+            .set_item_pinned(one_id, true)
+            .expect("pin should succeed");
+
+        let results = storage
+            .search_items("", 2, false, SearchExecution::Fast, 2, None)
+            .expect("should load browse results");
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].id, one_id);
+        assert_eq!(results[1].content, "five");
+        assert_eq!(results[2].content, "four");
 
         let _ = fs::remove_file(&storage.db_path);
     }

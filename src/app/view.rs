@@ -61,6 +61,7 @@ impl Render for LauncherView {
         let query_focus_handle = self.text_input_focus_handle(TextInputTarget::Query);
         let query_focused = query_focus_handle.is_focused(window);
 
+        let pinned_count = self.browse_pinned_count();
         let results = if self.items.is_empty() {
             div()
                 .id("results-list")
@@ -73,6 +74,82 @@ impl Render for LauncherView {
                 .text_sm()
                 .child("Nothing copied yet.")
                 .into_any_element()
+        } else if pinned_count > 0 {
+            // Browse mode with pins: a fixed "PINNED" section over a scrolling
+            // "MOST RECENT" section, each with a compact label.
+            let recent_count = self.items.len() - pinned_count;
+            let mut pinned_section = div()
+                .flex_none()
+                .max_h(relative(0.5))
+                .overflow_hidden()
+                .flex()
+                .flex_col();
+            for ix in 0..pinned_count {
+                if let (Some(item), Some(row_data)) =
+                    (self.items.get(ix), self.row_presentations.get(ix))
+                {
+                    pinned_section = pinned_section.child(self.render_result_row(
+                        ix,
+                        item,
+                        row_data,
+                        palette,
+                        info_editor_open,
+                        tag_editor_open,
+                        bowl_editor_open,
+                        parameter_editor_open,
+                        parameter_fill_open,
+                        transform_menu_open,
+                        cx,
+                    ));
+                }
+            }
+
+            let mut column = div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(section_label("PINNED", palette))
+                .child(pinned_section);
+
+            if recent_count > 0 {
+                let recents = uniform_list(
+                    "results-list",
+                    recent_count,
+                    cx.processor(move |this, range: Range<usize>, _window, cx| {
+                        let mut rows = Vec::with_capacity(range.end.saturating_sub(range.start));
+                        for local in range {
+                            let ix = pinned_count + local;
+                            if let (Some(item), Some(row_data)) =
+                                (this.items.get(ix), this.row_presentations.get(ix))
+                            {
+                                rows.push(this.render_result_row(
+                                    ix,
+                                    item,
+                                    row_data,
+                                    palette,
+                                    info_editor_open,
+                                    tag_editor_open,
+                                    bowl_editor_open,
+                                    parameter_editor_open,
+                                    parameter_fill_open,
+                                    transform_menu_open,
+                                    cx,
+                                ));
+                            }
+                        }
+                        rows
+                    }),
+                )
+                .w_full()
+                .flex_1()
+                .min_h(px(0.0))
+                .track_scroll(self.results_scroll.clone());
+                column = column
+                    .child(section_label("MOST RECENT", palette))
+                    .child(recents);
+            }
+
+            column.into_any_element()
         } else {
             uniform_list(
                 "results-list",
@@ -1448,6 +1525,8 @@ impl Render for LauncherView {
 
         let workspace = if self.emoji_search_active {
             self.render_emoji_search_workspace(palette, window, cx)
+        } else if self.command_palette_active() {
+            self.render_command_palette_workspace(palette, cx)
         } else {
             div()
                 .w_full()
@@ -1482,26 +1561,6 @@ impl Render for LauncherView {
             .child(div().w_full().h(px(1.0)).bg(palette.list_divider))
             .child(workspace);
 
-        // The full command reference expands above the permanent action bar.
-        if self.show_command_help {
-            content = content.child(
-                div()
-                    .w_full()
-                    .flex_none()
-                    .pb_2()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(palette.muted_text)
-                            .child("Commands"),
-                    )
-                    .child(render_help_run(&command_help_tips(), palette)),
-            );
-        }
-
         panel
             .child(content)
             .child(self.render_action_bar(palette, cx))
@@ -1509,6 +1568,132 @@ impl Render for LauncherView {
 }
 
 impl LauncherView {
+    /// The `>` command palette: a filtered list of commands on the left that run
+    /// against the currently-selected clipboard item, whose preview stays on the
+    /// right so it's clear what the command will act on.
+    fn render_command_palette_workspace(
+        &self,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let commands = self.command_palette_items();
+        let target_title = self
+            .row_presentations
+            .get(self.selected_index)
+            .map(|row| row.title.clone());
+
+        let selected = self.command_palette_selected;
+        let command_count = commands.len();
+        let labels: Vec<SharedString> = commands
+            .iter()
+            .map(|command| SharedString::from(command.label.clone()))
+            .collect();
+        let list: AnyElement = if command_count == 0 {
+            div()
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(palette.muted_text)
+                .text_sm()
+                .child("No matching commands.")
+                .into_any_element()
+        } else {
+            uniform_list(
+                "command-palette-list",
+                command_count,
+                cx.processor(move |_this, range: Range<usize>, _window, cx| {
+                    let mut rows = Vec::with_capacity(range.end.saturating_sub(range.start));
+                    for ix in range {
+                        let Some(label) = labels.get(ix).cloned() else {
+                            continue;
+                        };
+                        let mut row = div()
+                            .id(("command", ix))
+                            .w_full()
+                            .h(px(RESULT_ROW_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .px(px(8.0))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.command_palette_selected = ix;
+                                this.execute_selected_command(cx);
+                            }));
+                        if ix == selected {
+                            row = row.bg(palette.selected_bg);
+                        } else {
+                            row = row.hover({
+                                let hover = palette.row_hover_bg;
+                                move |style| style.bg(hover)
+                            });
+                        }
+                        rows.push(
+                            row.child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .truncate()
+                                    .text_size(px(14.0))
+                                    .text_color(palette.row_text)
+                                    .child(label),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                    rows
+                }),
+            )
+            .w_full()
+            .h_full()
+            .track_scroll(self.command_palette_scroll.clone())
+            .into_any_element()
+        };
+
+        let mut left = div()
+            .w(relative(RESULTS_LIST_WIDTH_RATIO))
+            .h_full()
+            .min_w(px(0.0))
+            .pt(px(4.0))
+            .pb(px(12.0))
+            .overflow_hidden()
+            .flex()
+            .flex_col();
+        if let Some(title) = target_title {
+            left = left.child(
+                div()
+                    .flex_none()
+                    .pb(px(4.0))
+                    .text_size(px(11.0))
+                    .text_color(palette.muted_text)
+                    .truncate()
+                    .child(format!("On: {title}")),
+            );
+        }
+        left = left.child(div().flex_1().min_h(px(0.0)).child(list));
+
+        div()
+            .w_full()
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_hidden()
+            .flex()
+            .gap_2()
+            .child(left)
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w(px(0.0))
+                    .pt(px(4.0))
+                    .pb(px(12.0))
+                    .child(self.render_preview_pane(palette)),
+            )
+            .into_any_element()
+    }
+
     /// Replaces the normal results+preview workspace while emoji search mode
     /// is active — a grid of glyph/name candidates from `emoji::search_emojis`.
     /// The search input itself is the main query row above (see the "Emoji"
@@ -1669,7 +1854,9 @@ impl LauncherView {
     /// selection and an always-available Commands entry, both with keycaps, so
     /// the app reads as keyboard-first before a key is pressed.
     fn render_action_bar(&self, palette: Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        let (primary_label, primary_key) = if self.emoji_search_active {
+        let (primary_label, primary_key) = if self.command_palette_active() {
+            ("Run", "↵")
+        } else if self.emoji_search_active {
             ("Copy", "↵")
         } else {
             match self.items.get(self.selected_index) {
@@ -1689,18 +1876,16 @@ impl LauncherView {
                 _ => ("Copy", "↵"),
             }
         };
-        let commands_key = if cfg!(target_os = "macos") {
-            "⌘H"
-        } else {
-            "Ctrl+H"
-        };
+        let commands_key = ">";
         let pin_key = if cfg!(target_os = "macos") {
-            "⌘⇧P"
+            "⌘⇧W"
         } else {
-            "Ctrl+Shift+P"
+            "Ctrl+Shift+W"
         };
         let pin_label = if self.pinned { "Unpin" } else { "Pin" };
-        let status_label: SharedString = if self.emoji_search_active {
+        let status_label: SharedString = if self.command_palette_active() {
+            SharedString::from("Run a command")
+        } else if self.emoji_search_active {
             self.emoji_search_results
                 .get(self.emoji_search_selected_index)
                 .copied()
@@ -1794,8 +1979,7 @@ impl LauncherView {
                             .gap(px(6.0))
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.show_command_help = !this.show_command_help;
-                                cx.notify();
+                                this.open_command_palette(cx);
                             }))
                             .child(
                                 div()
@@ -1950,6 +2134,17 @@ impl LauncherView {
             && row_data.expanded_preview.len() <= PREVIEW_PANE_SYNTAX_MAX_CHARS
             && row_data.expanded_preview_line_count <= PREVIEW_PANE_SYNTAX_MAX_LINES;
 
+        if !item.name.trim().is_empty() {
+            pane = pane.child(
+                div()
+                    .w_full()
+                    .text_base()
+                    .font_weight(FontWeight::NORMAL)
+                    .text_color(palette.title_text)
+                    .child(item.name.trim().to_owned()),
+            );
+        }
+
         pane = pane.child(
             div()
                 .w_full()
@@ -2099,6 +2294,78 @@ impl LauncherView {
         }
     }
 
+    /// The row's title slot: a static, ellipsized label, or — when this row is
+    /// the one being named — an inline editable field wired to the NameEditor
+    /// text input, so naming happens in place rather than in a separate panel.
+    fn render_row_title(
+        &self,
+        is_naming: bool,
+        row_data: &CachedRowPresentation,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if !is_naming {
+            return div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_size(px(14.0))
+                .text_color(palette.row_text)
+                .child(row_data.title.clone())
+                .into_any_element();
+        }
+
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .text_size(px(14.0))
+            .key_context("PastaTextInput")
+            .track_focus(&self.text_input_focus_handle(TextInputTarget::NameEditor))
+            .cursor(CursorStyle::IBeam)
+            .on_action(cx.listener(Self::query_backspace))
+            .on_action(cx.listener(Self::query_delete_word_backward))
+            .on_action(cx.listener(Self::query_left))
+            .on_action(cx.listener(Self::query_right))
+            .on_action(cx.listener(Self::query_select_left))
+            .on_action(cx.listener(Self::query_select_right))
+            .on_action(cx.listener(Self::query_select_all))
+            .on_action(cx.listener(Self::query_home))
+            .on_action(cx.listener(Self::query_end))
+            .on_action(cx.listener(Self::query_show_character_palette))
+            .on_action(cx.listener(Self::query_paste))
+            .on_action(cx.listener(Self::query_cut))
+            .on_action(cx.listener(Self::query_copy))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.text_input_on_mouse_down(TextInputTarget::NameEditor, event, window, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.text_input_on_mouse_up(TextInputTarget::NameEditor, event, window, cx);
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.text_input_on_mouse_up(TextInputTarget::NameEditor, event, window, cx);
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event, window, cx| {
+                this.text_input_on_mouse_move(TextInputTarget::NameEditor, event, window, cx);
+            }))
+            .child(TextInputElement::new(
+                cx.entity(),
+                TextInputTarget::NameEditor,
+                "Name this item…",
+                palette,
+                true,
+            ))
+            .into_any_element()
+    }
+
     fn render_result_row(
         &self,
         ix: usize,
@@ -2127,6 +2394,7 @@ impl LauncherView {
         };
 
         let interactive = !info_editor_open
+            && self.name_editor_target_id.is_none()
             && !tag_editor_open
             && !bowl_editor_open
             && !parameter_editor_open
@@ -2167,20 +2435,10 @@ impl LauncherView {
                 }));
         }
 
-        // Leading type icon — the one spot color lands on in the list.
-        fill = fill.child(
-            div()
-                .flex_none()
-                .w(px(15.0))
-                .flex()
-                .justify_center()
-                .text_size(px(14.0))
-                .text_color(type_color(item.item_type, palette.dark))
-                .child(type_icon_glyph(item.item_type)),
-        );
-
-        // Title — single line, ellipsized on overflow. Image rows swap the
-        // text title for a small thumbnail plus dimensions/size label.
+        // Title — single line, ellipsized on overflow, or an inline editable
+        // field when this row is being named. Image rows swap the text title
+        // for a small thumbnail plus dimensions/size label.
+        let is_naming = self.name_editor_target_id == Some(item.id);
         if let Some(image) = &item.image {
             fill = fill.child(
                 div()
@@ -2188,35 +2446,34 @@ impl LauncherView {
                     .min_w(px(0.0))
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    // Left inset + gap live on the wrapper, not the img element
+                    // (GPUI's image ignores its own margins). The small left
+                    // pad lines the thumbnail's edge up with the text rows'
+                    // optical ink; the gap separates it from the size label.
+                    .pl(px(2.0))
+                    .gap(px(10.0))
                     .child(
-                        img(image.path.clone())
+                        // A fixed, clipped 24×24 frame — without this the image
+                        // is scaled to fit its height only, overflowing into a
+                        // wide rectangle that both protrudes left and crowds the
+                        // label. overflow_hidden + object-fit cover crops it to
+                        // a clean square.
+                        div()
                             .flex_none()
                             .w(px(24.0))
                             .h(px(24.0))
                             .rounded(px(4.0))
-                            .object_fit(ObjectFit::Cover),
+                            .overflow_hidden()
+                            .child(
+                                img(image.path.clone())
+                                    .size_full()
+                                    .object_fit(ObjectFit::Cover),
+                            ),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .truncate()
-                            .text_size(px(14.0))
-                            .text_color(palette.row_text)
-                            .child(row_data.title.clone()),
-                    ),
+                    .child(self.render_row_title(is_naming, row_data, palette, cx)),
             );
         } else {
-            fill = fill.child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .truncate()
-                    .text_size(px(14.0))
-                    .text_color(palette.row_text)
-                    .child(row_data.title.clone()),
-            );
+            fill = fill.child(self.render_row_title(is_naming, row_data, palette, cx));
         }
 
         if let Some(pill) = secret_pill {
@@ -2235,14 +2492,25 @@ impl LauncherView {
             );
         }
 
-        // Trailing timestamp.
-        fill = fill.child(
-            div()
-                .flex_none()
-                .text_size(px(11.0))
-                .text_color(palette.row_meta_text)
-                .child(row_data.created_label.clone()),
-        );
+        // Trailing slot: pinned rows show an accent pin marker in place of the
+        // timestamp; everything else keeps its relative-time label.
+        if item.pin_order.is_some() {
+            fill = fill.child(
+                svg()
+                    .path("icons/pin.svg")
+                    .size(px(13.0))
+                    .flex_shrink_0()
+                    .text_color(palette.accent),
+            );
+        } else {
+            fill = fill.child(
+                div()
+                    .flex_none()
+                    .text_size(px(11.0))
+                    .text_color(palette.row_meta_text)
+                    .child(row_data.created_label.clone()),
+            );
+        }
 
         div()
             .w_full()
@@ -2251,6 +2519,18 @@ impl LauncherView {
             .child(fill)
             .into_any_element()
     }
+}
+
+/// A compact section header for the browse-mode results ("PINNED" / "MOST
+/// RECENT"), matching the muted, left-aligned style shared by both sections.
+fn section_label(label: &str, palette: Palette) -> impl IntoElement {
+    div()
+        .flex_none()
+        .pt(px(4.0))
+        .pb(px(2.0))
+        .text_size(px(11.0))
+        .text_color(palette.muted_text)
+        .child(label.to_owned())
 }
 
 fn search_suggestion_heading(query: &str) -> &'static str {
@@ -2293,89 +2573,13 @@ fn primary_keycap(label: &str, palette: Palette) -> impl IntoElement {
         .flex_none()
         .text_size(px(11.0))
         .line_height(px(14.0))
-        .text_color(palette.query_active)
+        .text_color(palette.action_bar_bg)
         .bg(palette.accent)
         .rounded(px(4.0))
         .px(px(6.0))
         .py(px(2.0))
         .whitespace_nowrap()
         .child(label.to_owned())
-}
-
-fn command_help_tips() -> Vec<&'static str> {
-    if cfg!(target_os = "macos") {
-        vec![
-            "⏎ copy",
-            "⌘R reveal",
-            "⌘J/K/L/; nav",
-            "⌘I info",
-            "⌘P param",
-            "Tab transforms",
-            "⌘T +tags",
-            "⌘⇧T -tags",
-            "⌘B bowl",
-            "⌘⇧B -bowl",
-            "⌥⌘B import",
-            ":b search bowl",
-            ":e export bowl",
-            "↹ autocomplete",
-            "⌘⇧S secret",
-            "⌘D delete",
-            "⌘⇧P pin",
-            "Esc close",
-            "⌘Q quit",
-            "⌘H hide help",
-        ]
-    } else {
-        vec![
-            "⏎ copy",
-            "Ctrl+R reveal",
-            "Ctrl+J/K/L/; nav",
-            "Ctrl+I info",
-            "Ctrl+P param",
-            "Tab transforms",
-            "Ctrl+T +tags",
-            "Ctrl+⇧T -tags",
-            "Ctrl+B bowl",
-            "Ctrl+⇧B -bowl",
-            "Ctrl+Alt+B import",
-            ":b search bowl",
-            ":e export bowl",
-            "↹ autocomplete",
-            "Ctrl+⇧S secret",
-            "Ctrl+D delete",
-            "Ctrl+⇧P pin",
-            "Esc close",
-            "Ctrl+Q quit",
-            "Ctrl+H hide help",
-        ]
-    }
-}
-
-fn render_help_run(tips: &[&str], palette: Palette) -> impl IntoElement {
-    let help_chip_bg = scale_alpha(palette.row_hover_bg, if palette.dark { 0.9 } else { 1.0 });
-    let help_chip_border =
-        scale_alpha(palette.window_border, if palette.dark { 0.84 } else { 0.9 });
-
-    let mut chips = div().flex().flex_row().flex_wrap().items_center().gap_1();
-    for tip in tips {
-        chips = chips.child(
-            div()
-                .flex_shrink_0()
-                .text_xs()
-                .line_height(px(14.0))
-                .text_color(palette.muted_text)
-                .bg(help_chip_bg)
-                .border_1()
-                .border_color(help_chip_border)
-                .rounded_md()
-                .px_1()
-                .py(px(2.0))
-                .child((*tip).to_owned()),
-        );
-    }
-
-    div().flex_none().max_w_full().child(chips)
 }
 
 fn qr_canvas_element(modules: Vec<bool>, width: usize) -> AnyElement {

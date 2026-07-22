@@ -10,6 +10,43 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use toml::Value as TomlValue;
 
+/// An action the `>` command palette can run against the selected item. Each
+/// variant maps to an existing item action in `execute_command`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandAction {
+    Copy,
+    TogglePin,
+    Name,
+    SetInfo,
+    AddTags,
+    RemoveTags,
+    AddBowl,
+    RemoveBowl,
+    EditParameters,
+    Transform,
+    RevealSecret,
+    ToggleSecret,
+    Delete,
+}
+
+/// One row in the command palette: what it does, how it reads, and the extra
+/// `keywords` it can be matched by (so "note" finds "Set info", etc.).
+pub(crate) struct CommandItem {
+    pub(crate) action: CommandAction,
+    pub(crate) label: String,
+    pub(crate) keywords: &'static str,
+}
+
+impl CommandItem {
+    fn new(action: CommandAction, label: &str, keywords: &'static str) -> Self {
+        Self {
+            action,
+            label: label.to_owned(),
+            keywords,
+        }
+    }
+}
+
 const TAG_SEARCH_AUTOCOMPLETE_LIMIT: usize = 6;
 const SEARCH_SEMANTIC_DELAY_MS: u64 = 90;
 const SEARCH_NEURAL_DELAY_MS: u64 = 320;
@@ -34,6 +71,7 @@ impl LauncherView {
             pasta_brain_enabled,
             query_input_state: TextInputState::new(cx),
             info_editor_input_state: TextInputState::new(cx),
+            name_editor_input_state: TextInputState::new(cx),
             tag_editor_input_state: TextInputState::new(cx),
             bowl_editor_input_state: TextInputState::new(cx),
             parameter_name_input_state: TextInputState::new(cx),
@@ -63,6 +101,9 @@ impl LauncherView {
             info_editor_target_id: None,
             info_editor_input: String::new(),
             info_editor_select_all: false,
+            name_editor_target_id: None,
+            name_editor_input: String::new(),
+            name_editor_select_all: false,
             tag_editor_target_id: None,
             tag_editor_input: String::new(),
             tag_editor_select_all: false,
@@ -90,13 +131,14 @@ impl LauncherView {
             suppress_auto_hide: false,
             suppress_auto_hide_until: None,
             pinned: false,
-            show_command_help: false,
+            command_palette_selected: 0,
             caret_visible: true,
             caret_blink_due_at: Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS),
             emoji_search_active: false,
             emoji_search_results: Vec::new(),
             emoji_search_selected_index: 0,
             emoji_results_scroll: UniformListScrollHandle::new(),
+            command_palette_scroll: UniformListScrollHandle::new(),
         };
         view.begin_search_generation();
         view.request_search(SearchExecution::Fast);
@@ -109,6 +151,7 @@ impl LauncherView {
         self.tag_search_suggestions.clear();
         self.query_input_state.reset();
         self.info_editor_input_state.reset();
+        self.name_editor_input_state.reset();
         self.tag_editor_input_state.reset();
         self.bowl_editor_input_state.reset();
         self.parameter_name_input_state.reset();
@@ -124,6 +167,9 @@ impl LauncherView {
         self.info_editor_target_id = None;
         self.info_editor_input.clear();
         self.info_editor_select_all = false;
+        self.name_editor_target_id = None;
+        self.name_editor_input.clear();
+        self.name_editor_select_all = false;
         self.tag_editor_target_id = None;
         self.tag_editor_input.clear();
         self.tag_editor_select_all = false;
@@ -151,7 +197,7 @@ impl LauncherView {
         self.suppress_auto_hide = false;
         self.suppress_auto_hide_until = None;
         self.pinned = false;
-        self.show_command_help = false;
+        self.command_palette_selected = 0;
         self.emoji_search_active = false;
         self.emoji_search_results.clear();
         self.emoji_search_selected_index = 0;
@@ -184,6 +230,34 @@ impl LauncherView {
             .scroll_to_item_strict(0, ScrollStrategy::Top);
     }
 
+    /// While browsing (empty query), the results split into a fixed "PINNED"
+    /// section and a scrolling "MOST RECENT" section. Returns the number of
+    /// leading pinned items when that split is active, or 0 otherwise (a plain
+    /// single list — search results, emoji mode, or nothing pinned).
+    pub(crate) fn browse_pinned_count(&self) -> usize {
+        if self.emoji_search_active || !self.query.is_empty() {
+            return 0;
+        }
+        self.items
+            .iter()
+            .take_while(|item| item.pin_order.is_some())
+            .count()
+    }
+
+    /// Scroll the given item index into view, accounting for the browse-mode
+    /// section split: recent items live in their own scrolling list offset by
+    /// the pinned run, while pinned items render in a fixed section that is
+    /// always visible and needs no scrolling.
+    pub(crate) fn scroll_result_into_view(&self, item_index: usize, strategy: ScrollStrategy) {
+        let pinned = self.browse_pinned_count();
+        if pinned == 0 {
+            self.results_scroll.scroll_to_item(item_index, strategy);
+        } else if item_index >= pinned {
+            self.results_scroll
+                .scroll_to_item(item_index - pinned, strategy);
+        }
+    }
+
     pub(crate) fn queue_text_input_focus(&mut self, target: TextInputTarget) {
         self.pending_text_input_focus = Some(target);
     }
@@ -191,6 +265,15 @@ impl LauncherView {
     pub(crate) fn query_did_change(&mut self, cx: &mut Context<Self>) {
         if self.emoji_search_active {
             self.refresh_emoji_search_results();
+            cx.notify();
+            return;
+        }
+        if self.command_palette_active() {
+            // Command mode: leave the clipboard list and its selection frozen
+            // (that item is the command's target), invalidate any in-flight
+            // search, and just reset the palette's own row selection.
+            self.command_palette_selected = 0;
+            self.begin_search_generation();
             cx.notify();
             return;
         }
@@ -674,8 +757,7 @@ impl LauncherView {
 
         if self.selected_index != previous_index {
             self.mark_selection_changed(cx);
-            self.results_scroll
-                .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+            self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
             cx.notify();
         }
     }
@@ -689,8 +771,7 @@ impl LauncherView {
         let next_index = index.min(self.items.len().saturating_sub(1));
         let changed = self.selected_index != next_index;
         self.selected_index = next_index;
-        self.results_scroll
-            .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+        self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
         if changed {
             self.mark_selection_changed(cx);
         }
@@ -794,6 +875,201 @@ impl LauncherView {
         self.query_did_change(cx);
     }
 
+    /// The command palette is active whenever the query begins with `>`, the
+    /// convention for "run a command against the selected item".
+    pub(crate) fn command_palette_active(&self) -> bool {
+        self.query.starts_with('>')
+    }
+
+    /// The lowercased filter text after the leading `>`.
+    fn command_palette_filter(&self) -> String {
+        self.query
+            .strip_prefix('>')
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase()
+    }
+
+    /// The commands offered for the currently-selected item, already filtered by
+    /// the palette query. Labels adapt to the target (Pin vs Unpin, Mark vs
+    /// Reveal secret) so the palette always describes what will actually happen.
+    pub(crate) fn command_palette_items(&self) -> Vec<CommandItem> {
+        let target = self.items.get(self.selected_index);
+        let is_pinned = target.is_some_and(|item| item.pin_order.is_some());
+        let is_secret = target.is_some_and(|item| item.item_type == ClipboardItemType::Password);
+
+        let mut all = vec![
+            CommandItem::new(
+                CommandAction::Copy,
+                "Copy to clipboard",
+                "copy paste clipboard",
+            ),
+            CommandItem::new(
+                CommandAction::TogglePin,
+                if is_pinned { "Unpin item" } else { "Pin item" },
+                "pin unpin favorite top",
+            ),
+            CommandItem::new(
+                CommandAction::Name,
+                "Rename item",
+                "name rename label title",
+            ),
+            CommandItem::new(
+                CommandAction::SetInfo,
+                "Set info note",
+                "info note description annotate",
+            ),
+            CommandItem::new(CommandAction::AddTags, "Add tags", "tag tags add label"),
+            CommandItem::new(CommandAction::RemoveTags, "Remove tags", "tag tags remove"),
+            CommandItem::new(
+                CommandAction::AddBowl,
+                "Add to bowl",
+                "bowl collection group add",
+            ),
+            CommandItem::new(
+                CommandAction::RemoveBowl,
+                "Remove from bowl",
+                "bowl collection remove",
+            ),
+            CommandItem::new(
+                CommandAction::EditParameters,
+                "Edit parameters",
+                "parameter placeholder template variable",
+            ),
+            CommandItem::new(
+                CommandAction::Transform,
+                "Transform…",
+                "transform json base64 url jwt hash qr encode decode",
+            ),
+        ];
+        if is_secret {
+            all.push(CommandItem::new(
+                CommandAction::RevealSecret,
+                "Reveal secret",
+                "reveal show secret unmask",
+            ));
+            all.push(CommandItem::new(
+                CommandAction::ToggleSecret,
+                "Unmark as secret",
+                "secret unmark plain unprotect",
+            ));
+        } else {
+            all.push(CommandItem::new(
+                CommandAction::ToggleSecret,
+                "Mark as secret",
+                "secret mark protect hide password",
+            ));
+        }
+        all.push(CommandItem::new(
+            CommandAction::Delete,
+            "Delete item",
+            "delete remove trash",
+        ));
+
+        let filter = self.command_palette_filter();
+        if filter.is_empty() {
+            return all;
+        }
+        all.into_iter()
+            .filter(|command| {
+                command.label.to_lowercase().contains(&filter)
+                    || command.keywords.contains(filter.as_str())
+            })
+            .collect()
+    }
+
+    pub(crate) fn move_command_selection(&mut self, direction: i32, cx: &mut Context<Self>) {
+        let count = self.command_palette_items().len();
+        if count == 0 {
+            self.command_palette_selected = 0;
+            return;
+        }
+        let max_index = (count - 1) as i32;
+        let next = (self.command_palette_selected as i32 + direction).clamp(0, max_index) as usize;
+        if next != self.command_palette_selected {
+            self.command_palette_selected = next;
+            self.command_palette_scroll
+                .scroll_to_item(next, ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
+
+    /// Enter command mode by seeding the query with `>` (used by the action-bar
+    /// "Commands" button; typing `>` gets there directly).
+    pub(crate) fn open_command_palette(&mut self, cx: &mut Context<Self>) {
+        if self.emoji_search_active {
+            self.cancel_emoji_search(cx);
+        }
+        self.set_text_input_content(TextInputTarget::Query, ">".to_owned());
+        let cursor = self.query.len();
+        self.query_input_state.selected_range = cursor..cursor;
+        self.query_input_state.selection_reversed = false;
+        self.query_input_state.marked_range = None;
+        self.command_palette_selected = 0;
+        self.queue_text_input_focus(TextInputTarget::Query);
+        self.query_did_change(cx);
+    }
+
+    /// Leave command mode without running anything, restoring the normal browse
+    /// list for the (still-selected) item.
+    pub(crate) fn exit_command_palette(&mut self, cx: &mut Context<Self>) {
+        self.query.clear();
+        self.query_input_state.reset();
+        self.command_palette_selected = 0;
+        self.queue_text_input_focus(TextInputTarget::Query);
+        self.query_did_change(cx);
+    }
+
+    pub(crate) fn execute_command(&mut self, action: CommandAction, cx: &mut Context<Self>) {
+        // Drop the `>` query first so that, once the command finishes (or opens
+        // its editor), the launcher is back in its normal state rather than
+        // still parsing command mode.
+        self.query.clear();
+        self.query_input_state.reset();
+        self.command_palette_selected = 0;
+        self.queue_text_input_focus(TextInputTarget::Query);
+
+        match action {
+            CommandAction::Copy => self.copy_selected_to_clipboard(cx),
+            CommandAction::TogglePin => self.toggle_selected_item_pin(cx),
+            CommandAction::Name => self.start_name_editor_for_selected(cx),
+            CommandAction::SetInfo => self.start_info_editor_for_selected(cx),
+            CommandAction::AddTags => self.add_custom_tags_to_selected(cx),
+            CommandAction::RemoveTags => self.remove_custom_tags_from_selected(cx),
+            CommandAction::AddBowl => self.start_bowl_editor_for_selected(cx),
+            CommandAction::RemoveBowl => self.remove_bowl_from_selected(cx),
+            CommandAction::EditParameters => self.start_parameter_editor_for_selected(cx),
+            CommandAction::Transform => self.toggle_transform_menu(cx),
+            CommandAction::RevealSecret => self.reveal_and_copy_selected_secret(cx),
+            CommandAction::ToggleSecret => self.toggle_selected_item_secret_state(cx),
+            CommandAction::Delete => self.delete_selected_item(cx),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn execute_selected_command(&mut self, cx: &mut Context<Self>) {
+        let items = self.command_palette_items();
+        let Some(action) = items.get(self.command_palette_selected).map(|c| c.action) else {
+            self.exit_command_palette(cx);
+            return;
+        };
+        self.execute_command(action, cx);
+    }
+
+    pub(crate) fn handle_command_palette_keystroke(
+        &mut self,
+        event: &KeystrokeEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event.keystroke.key.as_str() {
+            "escape" | "esc" => self.exit_command_palette(cx),
+            "up" | "arrowup" => self.move_command_selection(-1, cx),
+            "down" | "arrowdown" => self.move_command_selection(1, cx),
+            "enter" | "return" => self.execute_selected_command(cx),
+            _ => {}
+        }
+    }
+
     pub(crate) fn refresh_emoji_search_results(&mut self) {
         let embedder = if self.pasta_brain_enabled {
             self.storage.get_neural_embedder()
@@ -872,8 +1148,7 @@ impl LauncherView {
     pub(crate) fn copy_index_to_clipboard(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected_index = index;
         self.selection_changed_at = Instant::now();
-        self.results_scroll
-            .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+        self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
         self.copy_selected_to_clipboard(cx);
     }
 
@@ -886,8 +1161,7 @@ impl LauncherView {
             Ok(_) => {
                 self.refresh_items(self.preferred_refresh_execution());
                 if !self.items.is_empty() {
-                    self.results_scroll
-                        .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+                    self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
                 }
                 self.selection_changed_at = Instant::now();
                 cx.notify();
@@ -991,8 +1265,7 @@ impl LauncherView {
             self.selected_index = 0;
         }
         if !self.items.is_empty() {
-            self.results_scroll
-                .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+            self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
         }
         self.selection_changed_at = Instant::now();
     }
@@ -1048,8 +1321,7 @@ impl LauncherView {
                     self.selected_index = 0;
                 }
                 if !self.items.is_empty() {
-                    self.results_scroll
-                        .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+                    self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
                 }
                 self.selection_changed_at = Instant::now();
                 self.info_editor_target_id = None;
@@ -1088,6 +1360,108 @@ impl LauncherView {
         self.info_editor_input.clear();
         self.info_editor_input_state.reset();
         self.info_editor_select_all = false;
+        self.queue_text_input_focus(TextInputTarget::Query);
+        cx.notify();
+    }
+
+    pub(crate) fn start_name_editor_for_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(item) = self.items.get(self.selected_index).cloned() else {
+            return;
+        };
+
+        self.name_editor_target_id = Some(item.id);
+        self.set_text_input_content(TextInputTarget::NameEditor, item.name);
+        self.name_editor_input_state.reset();
+        let cursor = self.name_editor_input.len();
+        self.name_editor_input_state.selected_range = cursor..cursor;
+        self.name_editor_select_all = false;
+        self.info_editor_target_id = None;
+        self.info_editor_input.clear();
+        self.info_editor_input_state.reset();
+        self.info_editor_select_all = false;
+        self.tag_editor_target_id = None;
+        self.tag_editor_input.clear();
+        self.tag_editor_input_state.reset();
+        self.tag_editor_select_all = false;
+        self.tag_editor_mode = TagEditorMode::Add;
+        self.bowl_editor_target_id = None;
+        self.bowl_editor_input.clear();
+        self.bowl_editor_input_state.reset();
+        self.bowl_editor_select_all = false;
+        self.parameter_editor_target_id = None;
+        self.parameter_editor_selected_targets.clear();
+        self.parameter_editor_name_inputs.clear();
+        self.parameter_name_input_state.reset();
+        self.parameter_editor_name_focus_index = 0;
+        self.parameter_editor_name_select_all = false;
+        self.parameter_editor_stage = ParameterEditorStage::SelectValue;
+        self.parameter_editor_force_full = true;
+        self.parameter_fill_target_id = None;
+        self.parameter_fill_values.clear();
+        self.parameter_fill_input_state.reset();
+        self.parameter_fill_focus_index = 0;
+        self.parameter_fill_select_all = false;
+        self.transform_menu_open = false;
+        self.queue_text_input_focus(TextInputTarget::NameEditor);
+        cx.notify();
+    }
+
+    pub(crate) fn commit_name_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(item_id) = self.name_editor_target_id else {
+            return;
+        };
+        let normalized = self.name_editor_input.trim().to_owned();
+        match self.storage.upsert_item_name(item_id, &normalized) {
+            Ok(true) => {
+                let previous_index = self.selected_index;
+                self.refresh_items(self.preferred_refresh_execution());
+                if let Some(ix) = self.items.iter().position(|entry| entry.id == item_id) {
+                    self.selected_index = ix;
+                } else if !self.items.is_empty() {
+                    self.selected_index = previous_index.min(self.items.len().saturating_sub(1));
+                } else {
+                    self.selected_index = 0;
+                }
+                if !self.items.is_empty() {
+                    self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
+                }
+                self.selection_changed_at = Instant::now();
+                self.name_editor_target_id = None;
+                self.name_editor_input.clear();
+                self.name_editor_input_state.reset();
+                self.name_editor_select_all = false;
+                self.queue_text_input_focus(TextInputTarget::Query);
+                show_macos_notification(
+                    "Pasta",
+                    if normalized.is_empty() {
+                        "Name cleared."
+                    } else {
+                        "Name saved."
+                    },
+                );
+                cx.notify();
+            }
+            Ok(false) => {
+                self.name_editor_target_id = None;
+                self.name_editor_input.clear();
+                self.name_editor_input_state.reset();
+                self.name_editor_select_all = false;
+                self.queue_text_input_focus(TextInputTarget::Query);
+                show_macos_notification("Pasta", "Name unchanged.");
+                cx.notify();
+            }
+            Err(err) => {
+                eprintln!("warning: failed to update snippet name: {err}");
+                show_macos_notification("Pasta", "Failed to save name.");
+            }
+        }
+    }
+
+    pub(crate) fn cancel_name_editor(&mut self, cx: &mut Context<Self>) {
+        self.name_editor_target_id = None;
+        self.name_editor_input.clear();
+        self.name_editor_input_state.reset();
+        self.name_editor_select_all = false;
         self.queue_text_input_focus(TextInputTarget::Query);
         cx.notify();
     }
@@ -1159,13 +1533,11 @@ impl LauncherView {
                 if let Some(ix) = self.items.iter().position(|entry| entry.id == item_id) {
                     self.selected_index = ix;
                     self.selection_changed_at = Instant::now();
-                    self.results_scroll
-                        .scroll_to_item(ix, ScrollStrategy::Center);
+                    self.scroll_result_into_view(ix, ScrollStrategy::Center);
                 } else if !self.items.is_empty() {
                     self.selected_index = previous_index.min(self.items.len().saturating_sub(1));
                     self.selection_changed_at = Instant::now();
-                    self.results_scroll
-                        .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+                    self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
                 }
 
                 self.bowl_editor_target_id = None;
@@ -1225,14 +1597,12 @@ impl LauncherView {
                     if let Some(ix) = self.items.iter().position(|entry| entry.id == item_id) {
                         self.selected_index = ix;
                         self.selection_changed_at = Instant::now();
-                        self.results_scroll
-                            .scroll_to_item(ix, ScrollStrategy::Center);
+                        self.scroll_result_into_view(ix, ScrollStrategy::Center);
                     } else if !self.items.is_empty() {
                         self.selected_index =
                             previous_index.min(self.items.len().saturating_sub(1));
                         self.selection_changed_at = Instant::now();
-                        self.results_scroll
-                            .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+                        self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
                     }
                     show_macos_notification("Pasta", "Removed from bowl.");
                     cx.notify();
@@ -1243,6 +1613,63 @@ impl LauncherView {
             Err(err) => {
                 eprintln!("warning: failed to remove bowl: {err}");
                 show_macos_notification("Pasta", "Failed to remove bowl.");
+            }
+        }
+    }
+
+    pub(crate) fn toggle_selected_item_pin(&mut self, cx: &mut Context<Self>) {
+        let Some(item) = self.items.get(self.selected_index) else {
+            return;
+        };
+        let item_id = item.id;
+        let next_pinned = item.pin_order.is_none();
+
+        match self.storage.set_item_pinned(item_id, next_pinned) {
+            Ok(changed) => {
+                if changed {
+                    let previous_index = self.selected_index;
+                    self.refresh_items(self.preferred_refresh_execution());
+                    if let Some(ix) = self.items.iter().position(|entry| entry.id == item_id) {
+                        self.selected_index = ix;
+                        self.selection_changed_at = Instant::now();
+                        self.scroll_result_into_view(ix, ScrollStrategy::Center);
+                    } else if !self.items.is_empty() {
+                        self.selected_index =
+                            previous_index.min(self.items.len().saturating_sub(1));
+                        self.selection_changed_at = Instant::now();
+                        self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
+                    }
+                    let message = if next_pinned { "Pinned." } else { "Unpinned." };
+                    show_macos_notification("Pasta", message);
+                    cx.notify();
+                }
+            }
+            Err(err) => {
+                eprintln!("warning: failed to update pin state: {err}");
+                show_macos_notification("Pasta", "Failed to update pin.");
+            }
+        }
+    }
+
+    pub(crate) fn move_selected_pinned_item(&mut self, move_up: bool, cx: &mut Context<Self>) {
+        let Some(item_id) = self.items.get(self.selected_index).map(|item| item.id) else {
+            return;
+        };
+
+        match self.storage.reorder_pinned_item(item_id, move_up) {
+            Ok(true) => {
+                self.refresh_items(self.preferred_refresh_execution());
+                if let Some(ix) = self.items.iter().position(|entry| entry.id == item_id) {
+                    self.selected_index = ix;
+                    self.selection_changed_at = Instant::now();
+                    self.scroll_result_into_view(ix, ScrollStrategy::Center);
+                }
+                cx.notify();
+            }
+            Ok(false) => {}
+            Err(err) => {
+                eprintln!("warning: failed to reorder pinned item: {err}");
+                show_macos_notification("Pasta", "Failed to reorder pin.");
             }
         }
     }
@@ -1470,13 +1897,11 @@ impl LauncherView {
                 if let Some(ix) = self.items.iter().position(|entry| entry.id == item_id) {
                     self.selected_index = ix;
                     self.selection_changed_at = Instant::now();
-                    self.results_scroll
-                        .scroll_to_item(ix, ScrollStrategy::Center);
+                    self.scroll_result_into_view(ix, ScrollStrategy::Center);
                 } else if !self.items.is_empty() {
                     self.selected_index = previous_index.min(self.items.len().saturating_sub(1));
                     self.selection_changed_at = Instant::now();
-                    self.results_scroll
-                        .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+                    self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
                 }
 
                 self.tag_editor_target_id = None;
@@ -1900,8 +2325,7 @@ impl LauncherView {
                 self.selected_index = 0;
             }
             if !self.items.is_empty() {
-                self.results_scroll
-                    .scroll_to_item(self.selected_index, ScrollStrategy::Center);
+                self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
             }
             self.selection_changed_at = Instant::now();
             self.parameter_editor_target_id = None;
@@ -2281,6 +2705,24 @@ impl LauncherView {
         }
     }
 
+    pub(crate) fn handle_name_editor_keystroke(
+        &mut self,
+        event: &KeystrokeEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let key = event.keystroke.key.as_str();
+
+        match key {
+            "escape" | "esc" => {
+                self.cancel_name_editor(cx);
+            }
+            "enter" | "return" => {
+                self.commit_name_editor(cx);
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn handle_tag_editor_keystroke(
         &mut self,
         event: &KeystrokeEvent,
@@ -2341,7 +2783,7 @@ impl LauncherView {
         }
         self.transform_menu_open = !self.transform_menu_open;
         if self.transform_menu_open {
-            self.show_command_help = false;
+            self.command_palette_selected = 0;
         }
         cx.notify();
     }
@@ -2483,6 +2925,11 @@ impl LauncherView {
             return;
         }
 
+        if self.name_editor_target_id.is_some() {
+            self.handle_name_editor_keystroke(event, cx);
+            return;
+        }
+
         if self.parameter_fill_target_id.is_some() {
             self.handle_parameter_fill_keystroke(event, cx);
             return;
@@ -2510,6 +2957,14 @@ impl LauncherView {
 
         if self.emoji_search_active {
             self.handle_emoji_search_keystroke(event, cx);
+            return;
+        }
+
+        if self.command_palette_active() {
+            // Navigation/execution keys drive the palette; character keys fall
+            // through to the query input (via the IME handler) to edit the
+            // filter, and other shortcuts are intentionally inert here.
+            self.handle_command_palette_keystroke(event, cx);
             return;
         }
 
@@ -2543,6 +2998,16 @@ impl LauncherView {
         }
 
         match key {
+            "up" | "arrowup"
+                if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function =>
+            {
+                self.move_selected_pinned_item(true, cx);
+            }
+            "down" | "arrowdown"
+                if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function =>
+            {
+                self.move_selected_pinned_item(false, cx);
+            }
             "up" | "arrowup" => {
                 self.move_selection(-1, cx);
                 return;
@@ -2586,11 +3051,6 @@ impl LauncherView {
                 self.toggle_selected_item_secret_state(cx);
                 return;
             }
-            "h" if action_mod && !modifiers.alt && !modifiers.function => {
-                self.show_command_help = !self.show_command_help;
-                cx.notify();
-                return;
-            }
             "t" if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function => {
                 self.remove_custom_tags_from_selected(cx);
                 return;
@@ -2616,13 +3076,19 @@ impl LauncherView {
                 return;
             }
             "p" if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function => {
+                self.toggle_selected_item_pin(cx);
+                return;
+            }
+            "w" if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function => {
                 self.pinned = !self.pinned;
                 cx.notify();
-                return;
             }
             "i" if action_mod && !modifiers.shift && !modifiers.alt && !modifiers.function => {
                 self.start_info_editor_for_selected(cx);
                 return;
+            }
+            "n" if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function => {
+                self.start_name_editor_for_selected(cx);
             }
             "q" if action_mod && !modifiers.alt && !modifiers.function => {
                 self.begin_close_transition(LauncherExitIntent::Hide);
@@ -3740,6 +4206,8 @@ city = "New York"
             ],
             created_at: "2026-03-29T00:39:00Z".to_owned(),
             image: None,
+            name: String::new(),
+            pin_order: None,
         };
 
         let item = build_bowl_export_item(&record, None);
@@ -3778,6 +4246,8 @@ city = "New York"
             parameters: Vec::new(),
             created_at: "2026-03-29T00:39:00Z".to_owned(),
             image: None,
+            name: String::new(),
+            pin_order: None,
         };
 
         let item = build_bowl_export_item(&record, None);

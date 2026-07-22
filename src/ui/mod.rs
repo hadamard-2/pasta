@@ -4,9 +4,7 @@ mod preview;
 mod syntax;
 
 pub(crate) use language::{LanguageTag, detect_language, language_color};
-pub(crate) use palette::{
-    Palette, palette_for, scale_alpha, tag_chip_color, type_color, type_icon_glyph,
-};
+pub(crate) use palette::{Palette, palette_for, scale_alpha, tag_chip_color, type_color};
 pub(crate) use preview::{
     bounded_preview_content, expanded_preview_content, format_byte_size, format_image_metadata,
     format_timestamp, format_timestamp_detail, masked_secret_preview, preview_content,
