@@ -491,7 +491,6 @@ impl LauncherView {
             return;
         }
 
-        show_macos_notification("Pasta", "Secret revealed. Press Enter again to copy.");
         cx.notify();
     }
 
@@ -813,7 +812,6 @@ impl LauncherView {
             #[cfg(target_os = "linux")]
             write_clipboard_image_bytes(&bytes, &image.mime_type);
 
-            show_macos_notification("Pasta", "Image copied to clipboard.");
             self.begin_close_transition(LauncherExitIntent::Hide);
             cx.notify();
             return;
@@ -830,16 +828,8 @@ impl LauncherView {
             self.schedule_secret_autoclear(&item.content, cx);
             self.revealed_secret_id = Some(item.id);
             self.reveal_until = Some(Instant::now() + Duration::from_secs(12));
-            let body = if cx.global::<UiStyleState>().secret_auto_clear {
-                "Secret copied to clipboard. Auto-clear in 30 seconds."
-            } else {
-                "Secret copied to clipboard."
-            };
-            show_macos_notification("Pasta", body);
             cx.notify();
             return;
-        } else {
-            show_macos_notification("Pasta", "Copied to clipboard.");
         }
         self.begin_close_transition(LauncherExitIntent::Hide);
         cx.notify();
@@ -1125,7 +1115,6 @@ impl LauncherView {
         cx.write_to_clipboard(ClipboardItem::new_string(glyph.to_owned()));
         #[cfg(target_os = "linux")]
         write_clipboard_text(glyph);
-        show_macos_notification("Pasta", "Copied to clipboard.");
         cx.notify();
     }
 
@@ -1181,12 +1170,9 @@ impl LauncherView {
             Ok(true) => {
                 self.reset_secret_reveal_state();
                 self.refresh_after_selected_item_update(item_id);
-                show_macos_notification("Pasta", "Item marked as secret.");
                 cx.notify();
             }
-            Ok(false) => {
-                show_macos_notification("Pasta", "Item is already protected.");
-            }
+            Ok(false) => {}
             Err(err) => {
                 eprintln!("warning: failed to mark item as secret: {err}");
                 show_macos_notification("Pasta", "Failed to mark item as secret.");
@@ -1199,7 +1185,6 @@ impl LauncherView {
             return;
         };
         if item.item_type != ClipboardItemType::Password {
-            show_macos_notification("Pasta", "Item is already unprotected.");
             return;
         }
         if !self.authenticate_secret_action("Remove secret protection in Pasta", cx) {
@@ -1210,12 +1195,9 @@ impl LauncherView {
             Ok(true) => {
                 self.reset_secret_reveal_state();
                 self.refresh_after_selected_item_update(item.id);
-                show_macos_notification("Pasta", "Secret protection removed.");
                 cx.notify();
             }
-            Ok(false) => {
-                show_macos_notification("Pasta", "Item is already unprotected.");
-            }
+            Ok(false) => {}
             Err(err) => {
                 eprintln!("warning: failed to unmark item as secret: {err}");
                 show_macos_notification("Pasta", "Failed to remove secret protection.");
@@ -1329,14 +1311,6 @@ impl LauncherView {
                 self.info_editor_input_state.reset();
                 self.info_editor_select_all = false;
                 self.queue_text_input_focus(TextInputTarget::Query);
-                show_macos_notification(
-                    "Pasta",
-                    if normalized.is_empty() {
-                        "Info cleared."
-                    } else {
-                        "Info saved."
-                    },
-                );
                 cx.notify();
             }
             Ok(false) => {
@@ -1345,7 +1319,6 @@ impl LauncherView {
                 self.info_editor_input_state.reset();
                 self.info_editor_select_all = false;
                 self.queue_text_input_focus(TextInputTarget::Query);
-                show_macos_notification("Pasta", "Info unchanged.");
                 cx.notify();
             }
             Err(err) => {
@@ -1431,14 +1404,6 @@ impl LauncherView {
                 self.name_editor_input_state.reset();
                 self.name_editor_select_all = false;
                 self.queue_text_input_focus(TextInputTarget::Query);
-                show_macos_notification(
-                    "Pasta",
-                    if normalized.is_empty() {
-                        "Name cleared."
-                    } else {
-                        "Name saved."
-                    },
-                );
                 cx.notify();
             }
             Ok(false) => {
@@ -1447,7 +1412,6 @@ impl LauncherView {
                 self.name_editor_input_state.reset();
                 self.name_editor_select_all = false;
                 self.queue_text_input_focus(TextInputTarget::Query);
-                show_macos_notification("Pasta", "Name unchanged.");
                 cx.notify();
             }
             Err(err) => {
@@ -1527,7 +1491,7 @@ impl LauncherView {
         };
 
         match self.storage.set_item_bowl(item_id, requested_bowl) {
-            Ok(changed) => {
+            Ok(_) => {
                 let previous_index = self.selected_index;
                 self.refresh_items(self.preferred_refresh_execution());
                 if let Some(ix) = self.items.iter().position(|entry| entry.id == item_id) {
@@ -1546,25 +1510,6 @@ impl LauncherView {
                 self.bowl_editor_select_all = false;
                 self.bowl_editor_suggestions.clear();
                 self.queue_text_input_focus(TextInputTarget::Query);
-                if changed {
-                    show_macos_notification(
-                        "Pasta",
-                        if requested_bowl.is_some() {
-                            "Bowl saved."
-                        } else {
-                            "Bowl cleared."
-                        },
-                    );
-                } else {
-                    show_macos_notification(
-                        "Pasta",
-                        if requested_bowl.is_some() {
-                            "Bowl unchanged."
-                        } else {
-                            "No bowl to clear."
-                        },
-                    );
-                }
                 cx.notify();
             }
             Err(err) => {
@@ -1604,10 +1549,7 @@ impl LauncherView {
                         self.selection_changed_at = Instant::now();
                         self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
                     }
-                    show_macos_notification("Pasta", "Removed from bowl.");
                     cx.notify();
-                } else {
-                    show_macos_notification("Pasta", "Snippet is not in a bowl.");
                 }
             }
             Err(err) => {
@@ -1639,8 +1581,6 @@ impl LauncherView {
                         self.selection_changed_at = Instant::now();
                         self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
                     }
-                    let message = if next_pinned { "Pinned." } else { "Unpinned." };
-                    show_macos_notification("Pasta", message);
                     cx.notify();
                 }
             }
@@ -1816,13 +1756,6 @@ impl LauncherView {
                 self.set_query_text(format!(":b {}", summary.bowl));
                 self.queue_text_input_focus(TextInputTarget::Query);
                 self.query_did_change(cx);
-                show_macos_notification(
-                    "Pasta",
-                    &format!(
-                        "Imported {} snippets into {}.",
-                        summary.imported_count, summary.bowl
-                    ),
-                );
             }
             Err(err) => {
                 eprintln!("warning: failed to import bowl: {err}");
@@ -1909,14 +1842,6 @@ impl LauncherView {
                 self.tag_editor_input_state.reset();
                 self.tag_editor_select_all = false;
                 self.queue_text_input_focus(TextInputTarget::Query);
-                show_macos_notification(
-                    "Pasta",
-                    if self.tag_editor_mode == TagEditorMode::Add {
-                        "Custom tags saved."
-                    } else {
-                        "Tags removed."
-                    },
-                );
                 self.tag_editor_mode = TagEditorMode::Add;
                 cx.notify();
             }
@@ -1926,14 +1851,6 @@ impl LauncherView {
                 self.tag_editor_input_state.reset();
                 self.tag_editor_select_all = false;
                 self.queue_text_input_focus(TextInputTarget::Query);
-                show_macos_notification(
-                    "Pasta",
-                    if self.tag_editor_mode == TagEditorMode::Add {
-                        "No new tags were added."
-                    } else {
-                        "No matching removable tags."
-                    },
-                );
                 self.tag_editor_mode = TagEditorMode::Add;
                 cx.notify();
             }
@@ -2337,10 +2254,7 @@ impl LauncherView {
             self.parameter_editor_stage = ParameterEditorStage::SelectValue;
             self.parameter_editor_force_full = true;
             self.queue_text_input_focus(TextInputTarget::Query);
-            show_macos_notification("Pasta", "Parameters saved.");
             cx.notify();
-        } else {
-            show_macos_notification("Pasta", "No parameter changes were applied.");
         }
     }
 
@@ -2613,14 +2527,6 @@ impl LauncherView {
         self.parameter_fill_focus_index = 0;
         self.parameter_fill_select_all = false;
         self.queue_text_input_focus(TextInputTarget::Query);
-        show_macos_notification(
-            "Pasta",
-            if all_blank {
-                "Copied original snippet."
-            } else {
-                "Copied with parameters."
-            },
-        );
         self.begin_close_transition(LauncherExitIntent::Hide);
         cx.notify();
     }
@@ -2899,7 +2805,6 @@ impl LauncherView {
             self.results_scroll.scroll_to_item(0, ScrollStrategy::Top);
         }
 
-        show_macos_notification("Pasta", &notification);
         cx.notify();
     }
 
