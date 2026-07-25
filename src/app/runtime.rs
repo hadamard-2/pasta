@@ -717,17 +717,22 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                     .ok()
                     .flatten();
 
-                if let Some(image) = clipboard_image {
+                // A file manager copying an image puts only a file *reference*
+                // on the clipboard, so fall back to reading the referenced
+                // file rather than storing its path as text.
+                let clipboard_image = clipboard_image
+                    .map(|image| (image.bytes.clone(), image.format.mime_type().to_owned()))
+                    .or_else(read_clipboard_file_image);
+
+                if let Some((bytes, mime_type)) = clipboard_image {
                     let should_ignore = cx
-                        .update(|cx| should_ignore_self_clipboard_write(cx, &image.bytes))
+                        .update(|cx| should_ignore_self_clipboard_write(cx, &bytes))
                         .unwrap_or(false);
                     if should_ignore {
                         continue;
                     }
 
                     let storage_for_insert = storage.clone();
-                    let mime_type = image.format.mime_type().to_owned();
-                    let bytes = image.bytes.clone();
                     let inserted = cx
                         .background_executor()
                         .spawn(async move {

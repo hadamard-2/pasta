@@ -644,7 +644,11 @@ fn main() {
             }
         };
 
-        if let Some(initial_snapshot) = read_clipboard_snapshot()
+        if let Some((bytes, mime_type)) = read_clipboard_file_image() {
+            // The clipboard already holds a file-manager image reference at
+            // startup; store the file itself, not its path.
+            let _ = storage.upsert_clipboard_image_item(&bytes, &mime_type);
+        } else if let Some(initial_snapshot) = read_clipboard_snapshot()
             && !initial_snapshot.is_transient
         {
             let _ = if initial_snapshot.is_concealed {

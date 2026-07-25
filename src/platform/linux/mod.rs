@@ -474,6 +474,81 @@ pub(crate) fn read_clipboard_text() -> Option<String> {
     None
 }
 
+/// Upper bound on a file-manager-copied image Pasta will pull into history.
+/// Keeps a stray multi-hundred-megabyte TIFF from being read into memory,
+/// encrypted, and copied into the images directory.
+const MAX_FILE_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// File managers (Nautilus, Dolphin, Thunar, …) copy files *by reference*: the
+/// clipboard carries `x-special/gnome-copied-files` and/or `text/uri-list`
+/// naming the file, plus a plain-text fallback that is only the path. No
+/// `image/*` target is offered, so the normal image-capture path misses it and
+/// we would store just the path string — replaying that item later pastes text
+/// instead of the picture. When the referenced file is a local image, read it
+/// off disk so history holds the real bytes.
+pub(crate) fn read_clipboard_file_image() -> Option<(Vec<u8>, String)> {
+    let mime_types = read_clipboard_mime_types();
+    // A genuine image payload is handled by the regular capture path.
+    if mime_types.iter().any(|mime| mime.starts_with("image/")) {
+        return None;
+    }
+
+    let uri_mime = mime_types.iter().find(|mime| {
+        let lowered = mime.to_ascii_lowercase();
+        lowered == "x-special/gnome-copied-files" || lowered == "text/uri-list"
+    })?;
+
+    let payload = read_clipboard_bytes(uri_mime)?;
+    let path = first_local_file_from_uri_payload(&payload)?;
+
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_FILE_IMAGE_BYTES {
+        return None;
+    }
+
+    let bytes = std::fs::read(&path).ok()?;
+    // Trust the file's own magic bytes rather than its extension, so a
+    // mislabelled `.png` that is really a JPEG is stored under the right type.
+    let format = image::guess_format(&bytes).ok()?;
+    Some((bytes, format.to_mime_type().to_owned()))
+}
+
+/// Extracts the first `file://` entry from a `text/uri-list` or
+/// `x-special/gnome-copied-files` payload. The GNOME variant prefixes the list
+/// with a `copy`/`cut` verb line; both use one URI per line and `text/uri-list`
+/// allows `#` comments. Remote URIs (`smb://`, `sftp://`, …) are skipped —
+/// there is no local file to read.
+fn first_local_file_from_uri_payload(payload: &[u8]) -> Option<PathBuf> {
+    let text = String::from_utf8_lossy(payload);
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .find_map(|line| line.strip_prefix("file://"))
+        .map(|encoded| PathBuf::from(percent_decode_path(encoded)))
+}
+
+/// Percent-decodes the path portion of a `file://` URI. Bytes that are not
+/// valid UTF-8 after decoding are preserved via a lossy conversion rather than
+/// failing the whole read.
+fn percent_decode_path(encoded: &str) -> String {
+    let raw = encoded.as_bytes();
+    let mut out = Vec::with_capacity(raw.len());
+    let mut index = 0;
+    while index < raw.len() {
+        if raw[index] == b'%' && index + 2 < raw.len() {
+            let hex = std::str::from_utf8(&raw[index + 1..index + 3]).ok();
+            if let Some(byte) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(raw[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 // ---------------------------------------------------------------------------
 // File dialogs (Phase 3)
 // ---------------------------------------------------------------------------
@@ -1854,6 +1929,18 @@ fn primary_content_mime_type(mime_types: &[String]) -> Option<String> {
 }
 
 fn read_clipboard_bytes(mime_type: &str) -> Option<Vec<u8>> {
+    if is_wayland_session() {
+        let (mut pipe, _) = get_contents(
+            ClipboardType::Regular,
+            Seat::Unspecified,
+            PasteMimeType::Specific(mime_type),
+        )
+        .ok()?;
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).ok()?;
+        return Some(bytes);
+    }
+
     if command_exists("xclip") {
         return read_via_command_bytes(
             "xclip",
@@ -1984,5 +2071,43 @@ fn write_via_command_bytes(program: &str, args: &[&str], value: &[u8]) -> Result
         Ok(())
     } else {
         Err(format!("{program} exited with status {status}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_gnome_copied_files_payload() {
+        let payload = b"copy\nfile:///home/user/Pictures/shot.png";
+        assert_eq!(
+            first_local_file_from_uri_payload(payload),
+            Some(PathBuf::from("/home/user/Pictures/shot.png"))
+        );
+    }
+
+    #[test]
+    fn parses_uri_list_with_comments_and_crlf() {
+        let payload = b"# comment\r\nfile:///tmp/a.jpg\r\nfile:///tmp/b.jpg\r\n";
+        assert_eq!(
+            first_local_file_from_uri_payload(payload),
+            Some(PathBuf::from("/tmp/a.jpg"))
+        );
+    }
+
+    #[test]
+    fn decodes_percent_escapes_in_file_uris() {
+        let payload = b"copy\nfile:///home/user/My%20Photos/caf%C3%A9%20%2B%20tea.png";
+        assert_eq!(
+            first_local_file_from_uri_payload(payload),
+            Some(PathBuf::from("/home/user/My Photos/café + tea.png"))
+        );
+    }
+
+    #[test]
+    fn ignores_remote_uris() {
+        let payload = b"copy\nsmb://server/share/photo.png";
+        assert_eq!(first_local_file_from_uri_payload(payload), None);
     }
 }
