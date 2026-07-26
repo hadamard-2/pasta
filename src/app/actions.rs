@@ -18,15 +18,83 @@ pub(crate) enum CommandAction {
     TogglePin,
     Name,
     SetInfo,
-    AddTags,
-    RemoveTags,
-    AddBowl,
-    RemoveBowl,
+    EditTags,
+    SetBowl,
     EditParameters,
     Transform,
     RevealSecret,
     ToggleSecret,
     Delete,
+}
+
+impl CommandAction {
+    /// The keyboard shortcut that runs this action directly from the results
+    /// list, shown faded beside its palette row. Must be kept in step with the
+    /// key routing in `handle_keystroke`.
+    pub(crate) fn shortcut_label(self) -> &'static str {
+        let mac = cfg!(target_os = "macos");
+        match self {
+            CommandAction::Copy => "Enter",
+            CommandAction::TogglePin => {
+                if mac {
+                    "⌘⇧P"
+                } else {
+                    "Ctrl+Shift+P"
+                }
+            }
+            CommandAction::Name => "F2",
+            CommandAction::SetInfo => {
+                if mac {
+                    "⌘I"
+                } else {
+                    "Ctrl+I"
+                }
+            }
+            CommandAction::EditTags => {
+                if mac {
+                    "⌘T"
+                } else {
+                    "Ctrl+T"
+                }
+            }
+            CommandAction::SetBowl => {
+                if mac {
+                    "⌘B"
+                } else {
+                    "Ctrl+B"
+                }
+            }
+            CommandAction::EditParameters => {
+                if mac {
+                    "⌘P"
+                } else {
+                    "Ctrl+P"
+                }
+            }
+            CommandAction::Transform => "Tab",
+            CommandAction::RevealSecret => {
+                if mac {
+                    "⌘R"
+                } else {
+                    "Ctrl+R"
+                }
+            }
+            CommandAction::ToggleSecret => {
+                if mac {
+                    "⌘⇧S"
+                } else {
+                    "Ctrl+Shift+S"
+                }
+            }
+            CommandAction::Delete => {
+                if mac {
+                    "⌘D"
+                } else {
+                    "Ctrl+D"
+                }
+            }
+        }
+    }
 }
 
 /// One row in the command palette: what it does, how it reads, and the extra
@@ -88,6 +156,7 @@ impl LauncherView {
             items: Vec::new(),
             row_presentations: Vec::new(),
             selected_index: 0,
+            pinned_section_collapsed: false,
             selection_changed_at: Instant::now(),
             transition_alpha: 1.0,
             transition_from: 1.0,
@@ -107,7 +176,6 @@ impl LauncherView {
             tag_editor_target_id: None,
             tag_editor_input: String::new(),
             tag_editor_select_all: false,
-            tag_editor_mode: TagEditorMode::Add,
             bowl_editor_target_id: None,
             bowl_editor_input: String::new(),
             bowl_editor_select_all: false,
@@ -158,6 +226,7 @@ impl LauncherView {
         self.parameter_fill_input_state.reset();
         self.pending_text_input_focus = Some(TextInputTarget::Query);
         self.selected_index = 0;
+        self.pinned_section_collapsed = false;
         self.selection_changed_at = Instant::now();
         self.items.clear();
         self.row_presentations.clear();
@@ -173,7 +242,6 @@ impl LauncherView {
         self.tag_editor_target_id = None;
         self.tag_editor_input.clear();
         self.tag_editor_select_all = false;
-        self.tag_editor_mode = TagEditorMode::Add;
         self.bowl_editor_target_id = None;
         self.bowl_editor_input.clear();
         self.bowl_editor_select_all = false;
@@ -208,9 +276,7 @@ impl LauncherView {
     pub(crate) fn set_items(&mut self, items: Vec<ClipboardRecord>) {
         self.items = items;
         self.row_presentations = CachedRowPresentation::collect(&self.items);
-        if self.selected_index >= self.items.len() {
-            self.selected_index = 0;
-        }
+        self.clamp_selection();
     }
 
     pub(crate) fn set_search_results(
@@ -220,8 +286,16 @@ impl LauncherView {
     ) {
         self.items = items;
         self.row_presentations = row_presentations;
-        if self.selected_index >= self.items.len() {
-            self.selected_index = 0;
+        self.clamp_selection();
+    }
+
+    /// Keep the selection inside the range of rows the user can actually see:
+    /// within the item list, and at or after the first selectable row (which
+    /// skips the pinned run while that section is collapsed).
+    fn clamp_selection(&mut self) {
+        let first = self.first_selectable_index();
+        if self.selected_index >= self.items.len() || self.selected_index < first {
+            self.selected_index = first.min(self.items.len().saturating_sub(1));
         }
     }
 
@@ -242,6 +316,31 @@ impl LauncherView {
             .iter()
             .take_while(|item| item.pin_order.is_some())
             .count()
+    }
+
+    /// Whether the "PINNED" section is currently rendered collapsed. Collapsing
+    /// is suppressed when there are no recent items to fall back to, so the
+    /// results list never ends up empty with nothing selectable.
+    pub(crate) fn pinned_section_is_collapsed(&self) -> bool {
+        let pinned = self.browse_pinned_count();
+        self.pinned_section_collapsed && pinned > 0 && pinned < self.items.len()
+    }
+
+    /// The first row the user can select — the start of "MOST RECENT" while the
+    /// pinned section is collapsed, otherwise the top of the list.
+    pub(crate) fn first_selectable_index(&self) -> usize {
+        if self.pinned_section_is_collapsed() {
+            self.browse_pinned_count()
+        } else {
+            0
+        }
+    }
+
+    pub(crate) fn toggle_pinned_section(&mut self, cx: &mut Context<Self>) {
+        self.pinned_section_collapsed = !self.pinned_section_collapsed;
+        self.clamp_selection();
+        self.mark_selection_changed(cx);
+        cx.notify();
     }
 
     /// Scroll the given item index into view, accounting for the browse-mode
@@ -277,8 +376,9 @@ impl LauncherView {
             cx.notify();
             return;
         }
-        let selection_changed = self.selected_index != 0;
-        self.selected_index = 0;
+        let first = self.first_selectable_index();
+        let selection_changed = self.selected_index != first;
+        self.selected_index = first;
         self.last_query_edit_at = Some(Instant::now());
         self.mark_selection_changed(cx);
         if selection_changed {
@@ -677,7 +777,7 @@ impl LauncherView {
         if previous_selected_id != next_selected_id {
             self.selection_changed_at = Instant::now();
         }
-        if self.selected_index == 0 {
+        if self.selected_index == self.first_selectable_index() {
             self.reset_results_scroll_to_top();
         }
         true
@@ -746,12 +846,13 @@ impl LauncherView {
         }
 
         let previous_index = self.selected_index;
+        let first = self.first_selectable_index();
         if direction > 0 {
             if self.selected_index + 1 < self.items.len() {
                 self.selected_index += 1;
             }
         } else if direction < 0 {
-            self.selected_index = self.selected_index.saturating_sub(1);
+            self.selected_index = self.selected_index.saturating_sub(1).max(first);
         }
 
         if self.selected_index != previous_index {
@@ -767,7 +868,10 @@ impl LauncherView {
             return;
         }
 
-        let next_index = index.min(self.items.len().saturating_sub(1));
+        let next_index = index.clamp(
+            self.first_selectable_index(),
+            self.items.len().saturating_sub(1),
+        );
         let changed = self.selected_index != next_index;
         self.selected_index = next_index;
         self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
@@ -909,17 +1013,15 @@ impl LauncherView {
                 "Set info note",
                 "info note description annotate",
             ),
-            CommandItem::new(CommandAction::AddTags, "Add tags", "tag tags add label"),
-            CommandItem::new(CommandAction::RemoveTags, "Remove tags", "tag tags remove"),
             CommandItem::new(
-                CommandAction::AddBowl,
-                "Add to bowl",
-                "bowl collection group add",
+                CommandAction::EditTags,
+                "Update tags",
+                "tag tags add remove label",
             ),
             CommandItem::new(
-                CommandAction::RemoveBowl,
-                "Remove from bowl",
-                "bowl collection remove",
+                CommandAction::SetBowl,
+                "Update bowl",
+                "bowl collection group add remove",
             ),
             CommandItem::new(
                 CommandAction::EditParameters,
@@ -1024,10 +1126,8 @@ impl LauncherView {
             CommandAction::TogglePin => self.toggle_selected_item_pin(cx),
             CommandAction::Name => self.start_name_editor_for_selected(cx),
             CommandAction::SetInfo => self.start_info_editor_for_selected(cx),
-            CommandAction::AddTags => self.add_custom_tags_to_selected(cx),
-            CommandAction::RemoveTags => self.remove_custom_tags_from_selected(cx),
-            CommandAction::AddBowl => self.start_bowl_editor_for_selected(cx),
-            CommandAction::RemoveBowl => self.remove_bowl_from_selected(cx),
+            CommandAction::EditTags => self.start_tag_editor_for_selected(cx),
+            CommandAction::SetBowl => self.start_bowl_editor_for_selected(cx),
             CommandAction::EditParameters => self.start_parameter_editor_for_selected(cx),
             CommandAction::Transform => self.toggle_transform_menu(cx),
             CommandAction::RevealSecret => self.reveal_and_copy_selected_secret(cx),
@@ -1267,7 +1367,6 @@ impl LauncherView {
         self.tag_editor_input.clear();
         self.tag_editor_input_state.reset();
         self.tag_editor_select_all = false;
-        self.tag_editor_mode = TagEditorMode::Add;
         self.parameter_editor_target_id = None;
         self.parameter_editor_selected_targets.clear();
         self.parameter_editor_name_inputs.clear();
@@ -1356,7 +1455,6 @@ impl LauncherView {
         self.tag_editor_input.clear();
         self.tag_editor_input_state.reset();
         self.tag_editor_select_all = false;
-        self.tag_editor_mode = TagEditorMode::Add;
         self.bowl_editor_target_id = None;
         self.bowl_editor_input.clear();
         self.bowl_editor_input_state.reset();
@@ -1443,7 +1541,6 @@ impl LauncherView {
         self.tag_editor_input.clear();
         self.tag_editor_input_state.reset();
         self.tag_editor_select_all = false;
-        self.tag_editor_mode = TagEditorMode::Add;
         self.bowl_editor_target_id = Some(item.id);
         self.bowl_editor_input = bowl_name_from_tags(&item.tags).unwrap_or_default();
         self.bowl_editor_input_state.reset();
@@ -1527,36 +1624,6 @@ impl LauncherView {
         self.bowl_editor_suggestions.clear();
         self.queue_text_input_focus(TextInputTarget::Query);
         cx.notify();
-    }
-
-    pub(crate) fn remove_bowl_from_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(item_id) = self.items.get(self.selected_index).map(|item| item.id) else {
-            return;
-        };
-
-        match self.storage.set_item_bowl(item_id, None) {
-            Ok(changed) => {
-                if changed {
-                    let previous_index = self.selected_index;
-                    self.refresh_items(self.preferred_refresh_execution());
-                    if let Some(ix) = self.items.iter().position(|entry| entry.id == item_id) {
-                        self.selected_index = ix;
-                        self.selection_changed_at = Instant::now();
-                        self.scroll_result_into_view(ix, ScrollStrategy::Center);
-                    } else if !self.items.is_empty() {
-                        self.selected_index =
-                            previous_index.min(self.items.len().saturating_sub(1));
-                        self.selection_changed_at = Instant::now();
-                        self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
-                    }
-                    cx.notify();
-                }
-            }
-            Err(err) => {
-                eprintln!("warning: failed to remove bowl: {err}");
-                show_macos_notification("Pasta", "Failed to remove bowl.");
-            }
-        }
     }
 
     pub(crate) fn toggle_selected_item_pin(&mut self, cx: &mut Context<Self>) {
@@ -1766,8 +1833,11 @@ impl LauncherView {
         }
     }
 
-    pub(crate) fn add_custom_tags_to_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(item_id) = self.items.get(self.selected_index).map(|item| item.id) else {
+    /// Open the tag editor for the selected item, prefilled with its current
+    /// custom tags. Editing that list is the whole interaction — adding a tag
+    /// and removing one are the same edit, committed together.
+    pub(crate) fn start_tag_editor_for_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(item) = self.items.get(self.selected_index).cloned() else {
             return;
         };
         self.info_editor_target_id = None;
@@ -1778,32 +1848,19 @@ impl LauncherView {
         self.bowl_editor_input.clear();
         self.bowl_editor_input_state.reset();
         self.bowl_editor_select_all = false;
-        self.tag_editor_mode = TagEditorMode::Add;
-        self.tag_editor_target_id = Some(item_id);
-        self.tag_editor_input.clear();
+        self.tag_editor_target_id = Some(item.id);
+        self.set_text_input_content(
+            TextInputTarget::TagEditor,
+            tags_without_bowl(&item.tags).join(", "),
+        );
         self.tag_editor_input_state.reset();
-        self.tag_editor_select_all = false;
-        self.queue_text_input_focus(TextInputTarget::TagEditor);
-        cx.notify();
-    }
-
-    pub(crate) fn remove_custom_tags_from_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(item_id) = self.items.get(self.selected_index).map(|item| item.id) else {
-            return;
-        };
-        self.info_editor_target_id = None;
-        self.info_editor_input.clear();
-        self.info_editor_input_state.reset();
-        self.info_editor_select_all = false;
-        self.bowl_editor_target_id = None;
-        self.bowl_editor_input.clear();
-        self.bowl_editor_input_state.reset();
-        self.bowl_editor_select_all = false;
-        self.tag_editor_mode = TagEditorMode::Remove;
-        self.tag_editor_target_id = Some(item_id);
-        self.tag_editor_input.clear();
-        self.tag_editor_input_state.reset();
-        self.tag_editor_select_all = false;
+        if self.tag_editor_input.is_empty() {
+            self.tag_editor_input_state.selected_range = 0..0;
+            self.tag_editor_select_all = false;
+        } else {
+            self.tag_editor_input_state.selected_range = 0..self.tag_editor_input.len();
+            self.tag_editor_select_all = true;
+        }
         self.queue_text_input_focus(TextInputTarget::TagEditor);
         cx.notify();
     }
@@ -1812,18 +1869,10 @@ impl LauncherView {
         let Some(item_id) = self.tag_editor_target_id else {
             return;
         };
+        // An empty field is a legitimate edit here — it clears every tag.
         let tags = parse_custom_tags_input(&self.tag_editor_input);
-        if tags.is_empty() {
-            show_macos_notification("Pasta", "No valid tags entered.");
-            return;
-        }
 
-        let result = match self.tag_editor_mode {
-            TagEditorMode::Add => self.storage.add_custom_tags(item_id, &tags),
-            TagEditorMode::Remove => self.storage.remove_custom_tags(item_id, &tags),
-        };
-
-        match result {
+        match self.storage.set_custom_tags(item_id, &tags) {
             Ok(true) => {
                 let previous_index = self.selected_index;
                 self.refresh_items(self.preferred_refresh_execution());
@@ -1842,7 +1891,6 @@ impl LauncherView {
                 self.tag_editor_input_state.reset();
                 self.tag_editor_select_all = false;
                 self.queue_text_input_focus(TextInputTarget::Query);
-                self.tag_editor_mode = TagEditorMode::Add;
                 cx.notify();
             }
             Ok(false) => {
@@ -1851,7 +1899,6 @@ impl LauncherView {
                 self.tag_editor_input_state.reset();
                 self.tag_editor_select_all = false;
                 self.queue_text_input_focus(TextInputTarget::Query);
-                self.tag_editor_mode = TagEditorMode::Add;
                 cx.notify();
             }
             Err(err) => {
@@ -1866,7 +1913,6 @@ impl LauncherView {
         self.tag_editor_input.clear();
         self.tag_editor_input_state.reset();
         self.tag_editor_select_all = false;
-        self.tag_editor_mode = TagEditorMode::Add;
         self.queue_text_input_focus(TextInputTarget::Query);
         cx.notify();
     }
@@ -2756,6 +2802,8 @@ impl LauncherView {
                 shell_quote_escape(&item.content),
                 "Shell-quoted to clipboard.",
             )),
+            TransformAction::JoinLines => join_lines_transform(&item.content),
+            TransformAction::StripNewlines => strip_newlines_transform(&item.content),
             TransformAction::JsonEncode => json_encode_transform(&item.content),
             TransformAction::JsonDecode => json_decode_transform(&item.content),
             TransformAction::JsonPretty => json_pretty_transform(&item.content),
@@ -2956,16 +3004,8 @@ impl LauncherView {
                 self.toggle_selected_item_secret_state(cx);
                 return;
             }
-            "t" if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function => {
-                self.remove_custom_tags_from_selected(cx);
-                return;
-            }
             "t" if action_mod && !modifiers.shift && !modifiers.alt && !modifiers.function => {
-                self.add_custom_tags_to_selected(cx);
-                return;
-            }
-            "b" if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function => {
-                self.remove_bowl_from_selected(cx);
+                self.start_tag_editor_for_selected(cx);
                 return;
             }
             "b" if action_mod && !modifiers.shift && modifiers.alt && !modifiers.function => {
@@ -2992,7 +3032,14 @@ impl LauncherView {
                 self.start_info_editor_for_selected(cx);
                 return;
             }
-            "n" if action_mod && modifiers.shift && !modifiers.alt && !modifiers.function => {
+            // Rename uses the platform-conventional F2. `modifiers.function` is
+            // deliberately not excluded: on Mac keyboards where the F-row is
+            // media-first, F2 is only reachable with fn held.
+            "f2" if !modifiers.control
+                && !modifiers.alt
+                && !modifiers.shift
+                && !modifiers.platform =>
+            {
                 self.start_name_editor_for_selected(cx);
             }
             "q" if action_mod && !modifiers.alt && !modifiers.function => {

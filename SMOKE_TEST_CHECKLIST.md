@@ -56,8 +56,10 @@ Current baseline:
 ### Editors
 
 - Open info editor with `Ctrl+I`, type, save, and cancel.
-- Open tag editor with `Ctrl+T`, type, save, and cancel.
-- Open remove-tags flow with `Ctrl+Shift+T`.
+- Rename an item with `F2`, type, save, and cancel.
+- Open tag editor with `Ctrl+T`: confirm it is prefilled with the item's current tags, that deleting one removes it on save, and that clearing the field removes them all without dropping the item's bowl.
+- Open bowl editor with `Ctrl+B`: confirm it is prefilled with the current bowl and that a blank field removes the item from its bowl.
+- Confirm the preview pane shows the item's bowl (tags and the info note are deliberately not shown there).
 - Open parameter editor with `Ctrl+P`.
 - Open parameter fill flow by copying a parameterized item.
 
@@ -65,6 +67,7 @@ Current baseline:
 
 - Open transforms with `Tab`.
 - Run at least one encode transform and one decode transform.
+- On a multi-line item, run `l` (join lines) and `L` (strip newlines) and confirm the pasted result matches.
 - Exit transforms with `Tab` or `Escape`.
 
 ### Visual Pass

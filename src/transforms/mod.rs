@@ -23,6 +23,32 @@ pub(crate) fn shell_quote_escape(input: &str) -> String {
     format!("'{}'", input.replace('\'', "'\"'\"'"))
 }
 
+/// Flatten multi-line text to one line, separating what were lines with a
+/// single space. Interior runs of whitespace collapse too (matching how
+/// `single_line_title` renders row titles), so indentation in a pasted command
+/// or SQL query doesn't survive as a run of spaces.
+pub(crate) fn join_lines_transform(input: &str) -> Result<(String, &'static str), String> {
+    let joined = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    if joined.is_empty() {
+        return Err("nothing to join".to_owned());
+    }
+    Ok((joined, "Joined to one line on clipboard."))
+}
+
+/// Delete line breaks without putting anything in their place, concatenating
+/// the lines. This is the variant for wrapped tokens, base64 blobs, and PEM
+/// bodies, where inserting spaces would corrupt the value.
+pub(crate) fn strip_newlines_transform(input: &str) -> Result<(String, &'static str), String> {
+    let stripped: String = input
+        .chars()
+        .filter(|ch| *ch != '\n' && *ch != '\r')
+        .collect();
+    if stripped.is_empty() {
+        return Err("nothing to strip".to_owned());
+    }
+    Ok((stripped, "Newlines stripped to clipboard."))
+}
+
 pub(crate) fn json_encode_transform(input: &str) -> Result<(String, &'static str), String> {
     let encoded =
         serde_json::to_string(input).map_err(|err| format!("json encode error: {err}"))?;

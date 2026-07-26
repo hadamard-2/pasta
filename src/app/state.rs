@@ -223,6 +223,10 @@ pub(crate) struct LauncherView {
     pub(crate) items: Vec<ClipboardRecord>,
     pub(crate) row_presentations: Vec<CachedRowPresentation>,
     pub(crate) selected_index: usize,
+    /// Browse mode's "PINNED" section starts expanded on every show; clicking
+    /// the section header collapses it, which also pushes the selection down to
+    /// the first "MOST RECENT" item since the pinned rows are then hidden.
+    pub(crate) pinned_section_collapsed: bool,
     pub(crate) selection_changed_at: Instant,
     pub(crate) transition_alpha: f32,
     pub(crate) transition_from: f32,
@@ -242,7 +246,6 @@ pub(crate) struct LauncherView {
     pub(crate) tag_editor_target_id: Option<i64>,
     pub(crate) tag_editor_input: String,
     pub(crate) tag_editor_select_all: bool,
-    pub(crate) tag_editor_mode: TagEditorMode,
     pub(crate) bowl_editor_target_id: Option<i64>,
     pub(crate) bowl_editor_input: String,
     pub(crate) bowl_editor_select_all: bool,

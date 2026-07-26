@@ -209,12 +209,6 @@ enum LauncherExitIntent {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TagEditorMode {
-    Add,
-    Remove,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum ParameterEditorStage {
     SelectValue,
     EnterName,
@@ -234,6 +228,8 @@ enum TextInputTarget {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TransformAction {
     ShellQuote,
+    JoinLines,
+    StripNewlines,
     JsonEncode,
     JsonDecode,
     JsonPretty,
@@ -260,6 +256,11 @@ fn transform_action_for_shortcut(
 
     match normalized_key.as_str() {
         "s" => Some(TransformAction::ShellQuote),
+        "l" => Some(if decode_requested {
+            TransformAction::StripNewlines
+        } else {
+            TransformAction::JoinLines
+        }),
         "j" => Some(if decode_requested {
             TransformAction::JsonDecode
         } else {
@@ -356,6 +357,46 @@ mod tests {
         let oversize = "a".repeat(3000);
         let err = qr_encode_matrix(&oversize).expect_err("qr oversize");
         assert!(err.to_lowercase().contains("too big"), "err was {err}");
+    }
+
+    #[test]
+    fn line_shortcuts_route_to_join_and_strip_actions() {
+        let no_modifiers = gpui::Modifiers::none();
+        let shift_modifiers = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::none()
+        };
+        assert_eq!(
+            transform_action_for_shortcut("l", &no_modifiers),
+            Some(TransformAction::JoinLines)
+        );
+        assert_eq!(
+            transform_action_for_shortcut("L", &no_modifiers),
+            Some(TransformAction::StripNewlines)
+        );
+        assert_eq!(
+            transform_action_for_shortcut("l", &shift_modifiers),
+            Some(TransformAction::StripNewlines)
+        );
+    }
+
+    #[test]
+    fn join_lines_collapses_breaks_and_indentation_to_single_spaces() {
+        let (joined, _) = join_lines_transform("SELECT *\n  FROM users\n\n WHERE id = 1\n")
+            .expect("joining should succeed");
+        assert_eq!(joined, "SELECT * FROM users WHERE id = 1");
+        assert!(join_lines_transform("  \n\t\n ").is_err());
+    }
+
+    #[test]
+    fn strip_newlines_concatenates_without_inserting_separators() {
+        let (stripped, _) =
+            strip_newlines_transform("aGVsbG8g\r\nd29ybGQ=\n").expect("stripping should succeed");
+        assert_eq!(stripped, "aGVsbG8gd29ybGQ=");
+        // Indentation is preserved here — only the line breaks go.
+        let (indented, _) = strip_newlines_transform("a\n  b").expect("stripping should succeed");
+        assert_eq!(indented, "a  b");
+        assert!(strip_newlines_transform("\n\n").is_err());
     }
 
     #[test]

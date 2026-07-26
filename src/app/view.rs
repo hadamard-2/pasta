@@ -78,13 +78,14 @@ impl Render for LauncherView {
             // Browse mode with pins: a fixed "PINNED" section over a scrolling
             // "MOST RECENT" section, each with a compact label.
             let recent_count = self.items.len() - pinned_count;
+            let pinned_collapsed = self.pinned_section_is_collapsed();
             let mut pinned_section = div()
                 .flex_none()
                 .max_h(relative(0.5))
                 .overflow_hidden()
                 .flex()
                 .flex_col();
-            for ix in 0..pinned_count {
+            for ix in 0..if pinned_collapsed { 0 } else { pinned_count } {
                 if let (Some(item), Some(row_data)) =
                     (self.items.get(ix), self.row_presentations.get(ix))
                 {
@@ -108,7 +109,7 @@ impl Render for LauncherView {
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(section_label("PINNED", palette))
+                .child(collapsible_section_label("PINNED", palette, cx))
                 .child(pinned_section);
 
             if recent_count > 0 {
@@ -332,14 +333,6 @@ impl Render for LauncherView {
                                         .size(px(18.0))
                                         .text_color(palette.title_text),
                                 ),
-                        );
-                    } else {
-                        query_container = query_container.child(
-                            svg()
-                                .path("icons/search.svg")
-                                .size(px(14.0))
-                                .flex_shrink_0()
-                                .text_color(palette.muted_text),
                         );
                     }
 
@@ -586,11 +579,7 @@ impl Render for LauncherView {
                     .border_1()
                     .border_color(palette.selected_border);
             }
-            let title = if self.tag_editor_mode == TagEditorMode::Add {
-                "Add Custom Tags"
-            } else {
-                "Remove Tags"
-            };
+            let title = "Update Tags";
 
             content = content.child(
                 div()
@@ -630,9 +619,9 @@ impl Render for LauncherView {
                             .text_xs()
                             .text_color(palette.muted_text)
                             .child(if cfg!(target_os = "macos") {
-                                "comma-separated • ⌘V"
+                                "comma-separated • blank = clear all • ⌘V"
                             } else {
-                                "comma-separated • Ctrl+V"
+                                "comma-separated • blank = clear all • Ctrl+V"
                             }),
                     ),
             );
@@ -722,7 +711,7 @@ impl Render for LauncherView {
                             div()
                                 .text_sm()
                                 .text_color(palette.title_text)
-                                .child(format!("Assign Bowl • Snippet #{item_id}")),
+                                .child(format!("Update Bowl • Snippet #{item_id}")),
                         ),
                 )
                 .child(bowl_input.child(TextInputElement::new(
@@ -1434,6 +1423,8 @@ impl Render for LauncherView {
                 .gap_1();
             for (ix, (label, action)) in [
                 ("s  Shell quote", TransformAction::ShellQuote),
+                ("l  Join lines", TransformAction::JoinLines),
+                ("L  Strip newlines", TransformAction::StripNewlines),
                 ("j  JSON encode", TransformAction::JsonEncode),
                 ("J  JSON decode", TransformAction::JsonDecode),
                 ("f  JSON pretty", TransformAction::JsonPretty),
@@ -1588,6 +1579,10 @@ impl LauncherView {
             .iter()
             .map(|command| SharedString::from(command.label.clone()))
             .collect();
+        let shortcuts: Vec<SharedString> = commands
+            .iter()
+            .map(|command| SharedString::from(command.action.shortcut_label()))
+            .collect();
         let list: AnyElement = if command_count == 0 {
             div()
                 .w_full()
@@ -1630,18 +1625,27 @@ impl LauncherView {
                                 move |style| style.bg(hover)
                             });
                         }
-                        rows.push(
-                            row.child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .truncate()
-                                    .text_size(px(14.0))
-                                    .text_color(palette.row_text)
-                                    .child(label),
-                            )
-                            .into_any_element(),
+                        row = row.child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .truncate()
+                                .text_size(px(14.0))
+                                .text_color(palette.row_text)
+                                .child(label),
                         );
+                        if let Some(shortcut) = shortcuts.get(ix).cloned() {
+                            row = row.child(
+                                div()
+                                    .flex_none()
+                                    .pl(px(8.0))
+                                    .text_size(px(11.0))
+                                    .text_color(palette.row_meta_text)
+                                    .whitespace_nowrap()
+                                    .child(shortcut),
+                            );
+                        }
+                        rows.push(row.into_any_element());
                     }
                     rows
                 }),
@@ -2167,23 +2171,29 @@ impl LauncherView {
             );
         }
 
-        if !item.description.trim().is_empty() {
+        // Only the bowl is surfaced here. The info note and the tag chips were
+        // both shown in this pane and pulled back out on 2026-07-26 to keep it
+        // uncluttered — they are on trial for a few weeks. If the bowl chip
+        // also turns out not to earn its space, drop this block outright and
+        // consider retiring the underlying fields rather than leaving the pane
+        // half-populated.
+        if let Some(bowl) = bowl_name_from_tags(&item.tags) {
             pane = pane.child(
                 div()
                     .w_full()
-                    .p_2()
-                    .bg(scale_alpha(
-                        palette.selected_bg,
-                        if palette.dark { 0.65 } else { 0.38 },
-                    ))
-                    .rounded_md()
-                    .child(div().text_xs().text_color(palette.muted_text).child("Info"))
+                    .child(div().text_xs().text_color(palette.muted_text).child("Bowl"))
                     .child(
-                        div()
-                            .mt_1()
-                            .text_sm()
-                            .text_color(palette.row_text)
-                            .child(item.description.clone()),
+                        div().w_full().mt_1().flex().flex_row().child(
+                            div()
+                                .text_xs()
+                                .text_color(palette.accent)
+                                .bg(palette.keycap_bg)
+                                .border_1()
+                                .border_color(palette.accent)
+                                .rounded_md()
+                                .px_1()
+                                .child(bowl),
+                        ),
                     ),
             );
         }
@@ -2492,25 +2502,15 @@ impl LauncherView {
             );
         }
 
-        // Trailing slot: pinned rows show an accent pin marker in place of the
-        // timestamp; everything else keeps its relative-time label.
-        if item.pin_order.is_some() {
-            fill = fill.child(
-                svg()
-                    .path("icons/pin.svg")
-                    .size(px(13.0))
-                    .flex_shrink_0()
-                    .text_color(palette.accent),
-            );
-        } else {
-            fill = fill.child(
-                div()
-                    .flex_none()
-                    .text_size(px(11.0))
-                    .text_color(palette.row_meta_text)
-                    .child(row_data.created_label.clone()),
-            );
-        }
+        // Trailing slot: every row keeps its relative-time label, pinned or not
+        // — the "PINNED" section header already carries that distinction.
+        fill = fill.child(
+            div()
+                .flex_none()
+                .text_size(px(11.0))
+                .text_color(palette.row_meta_text)
+                .child(row_data.created_label.clone()),
+        );
 
         div()
             .w_full()
@@ -2530,6 +2530,29 @@ fn section_label(label: &str, palette: Palette) -> impl IntoElement {
         .pb(px(2.0))
         .text_size(px(11.0))
         .text_color(palette.muted_text)
+        .child(label.to_owned())
+}
+
+/// The "PINNED" header, rendered as a click target that expands/collapses its
+/// section. Styled like `section_label`, with a hover color shift as the only
+/// hint that it is interactive.
+fn collapsible_section_label(
+    label: &str,
+    palette: Palette,
+    cx: &mut Context<LauncherView>,
+) -> impl IntoElement {
+    div()
+        .id("pinned-section-header")
+        .flex_none()
+        .pt(px(4.0))
+        .pb(px(2.0))
+        .cursor_pointer()
+        .text_size(px(11.0))
+        .text_color(palette.muted_text)
+        .hover(move |style| style.text_color(palette.title_text))
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.toggle_pinned_section(cx);
+        }))
         .child(label.to_owned())
 }
 

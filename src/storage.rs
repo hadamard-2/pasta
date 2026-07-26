@@ -907,11 +907,11 @@ impl ClipboardStorage {
         Ok(true)
     }
 
-    pub fn add_custom_tags(&self, id: i64, raw_tags: &[String]) -> Result<bool> {
-        if raw_tags.is_empty() {
-            return Ok(false);
-        }
-
+    /// Replace an item's custom tags with exactly `raw_tags`, leaving its bowl
+    /// membership (the `BOWL:` tag) untouched. Backs the single "Update tags"
+    /// editor, which is prefilled with the current tags — so anything the user
+    /// deletes from that field is a removal.
+    pub fn set_custom_tags(&self, id: i64, raw_tags: &[String]) -> Result<bool> {
         let conn = self.open()?;
         let existing_tags_json: Option<String> = conn
             .query_row(
@@ -925,85 +925,33 @@ impl ClipboardStorage {
             return Ok(false);
         };
 
-        let mut tags: Vec<String> = serde_json::from_str(&existing_tags_json).unwrap_or_default();
-        let mut existing: HashSet<String> =
-            tags.iter().map(|tag| tag.to_ascii_lowercase()).collect();
+        let existing: Vec<String> = serde_json::from_str(&existing_tags_json).unwrap_or_default();
+        let mut next: Vec<String> = existing
+            .iter()
+            .filter(|tag| is_bowl_tag(tag))
+            .cloned()
+            .collect();
 
-        let mut changed = false;
+        let mut seen: HashSet<String> = next.iter().map(|tag| tag.to_ascii_lowercase()).collect();
         for raw in raw_tags {
             let Some(normalized) = normalize_custom_tag(raw) else {
                 continue;
             };
-            let key = normalized.to_ascii_lowercase();
-            if existing.insert(key) {
-                tags.push(normalized);
-                changed = true;
+            if seen.insert(normalized.to_ascii_lowercase()) {
+                next.push(normalized);
             }
         }
 
-        if !changed {
+        next.sort_unstable();
+        next.dedup();
+        let next_tags_json = serde_json::to_string(&next)?;
+        if next_tags_json == existing_tags_json {
             return Ok(false);
         }
 
-        tags.sort_unstable();
-        tags.dedup();
-        let tags_json = serde_json::to_string(&tags)?;
         conn.execute(
             "UPDATE clipboard_items SET tags = ?1 WHERE id = ?2",
-            params![tags_json, id],
-        )?;
-        self.sync_index_record_from_db(id)?;
-        Ok(true)
-    }
-
-    pub fn remove_custom_tags(&self, id: i64, raw_tags: &[String]) -> Result<bool> {
-        if raw_tags.is_empty() {
-            return Ok(false);
-        }
-
-        let conn = self.open()?;
-        let existing_tags_json: Option<String> = conn
-            .query_row(
-                "SELECT tags FROM clipboard_items WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
-
-        let Some(existing_tags_json) = existing_tags_json else {
-            return Ok(false);
-        };
-
-        let tags: Vec<String> = serde_json::from_str(&existing_tags_json).unwrap_or_default();
-        let remove_keys: HashSet<String> = raw_tags
-            .iter()
-            .filter_map(|raw| normalize_custom_tag(raw))
-            .map(|normalized| normalized.to_ascii_lowercase())
-            .collect();
-        if remove_keys.is_empty() {
-            return Ok(false);
-        }
-
-        let mut changed = false;
-        let filtered: Vec<String> = tags
-            .into_iter()
-            .filter(|tag| {
-                let lower = tag.to_ascii_lowercase();
-                let remove = remove_keys.contains(&lower);
-                if remove {
-                    changed = true;
-                }
-                !remove
-            })
-            .collect();
-        if !changed {
-            return Ok(false);
-        }
-
-        let tags_json = serde_json::to_string(&filtered)?;
-        conn.execute(
-            "UPDATE clipboard_items SET tags = ?1 WHERE id = ?2",
-            params![tags_json, id],
+            params![next_tags_json, id],
         )?;
         self.sync_index_record_from_db(id)?;
         Ok(true)
@@ -4662,6 +4610,61 @@ mod tests {
             }
         }
         assert!(found, "pin_order column should exist after migration");
+
+        let _ = fs::remove_file(&storage.db_path);
+    }
+
+    #[test]
+    fn set_custom_tags_replaces_tags_but_keeps_bowl_membership() {
+        let storage = test_storage("set-custom-tags");
+        storage
+            .upsert_clipboard_item("tagged")
+            .expect("seed item should insert");
+        let id = storage
+            .search_items("", 10, false, SearchExecution::Fast, 1, None)
+            .expect("should load inserted items")
+            .first()
+            .expect("expected inserted item")
+            .id;
+
+        storage
+            .set_item_bowl(id, Some("k8s"))
+            .expect("assigning a bowl should succeed");
+        assert!(
+            storage
+                .set_custom_tags(id, &["alpha".to_owned(), "beta".to_owned()])
+                .expect("setting tags should succeed")
+        );
+
+        // Dropping "beta" from the list removes it; the bowl tag survives.
+        assert!(
+            storage
+                .set_custom_tags(id, &["alpha".to_owned()])
+                .expect("replacing tags should succeed")
+        );
+        let record = storage
+            .search_items("", 10, false, SearchExecution::Fast, 2, None)
+            .expect("should load items")
+            .into_iter()
+            .find(|item| item.id == id)
+            .expect("item should still exist");
+        assert_eq!(tags_without_bowl(&record.tags), vec!["ALPHA".to_owned()]);
+        assert_eq!(bowl_name_from_tags(&record.tags).as_deref(), Some("K8S"));
+
+        // An empty list clears every custom tag while still keeping the bowl.
+        assert!(
+            storage
+                .set_custom_tags(id, &[])
+                .expect("clearing tags should succeed")
+        );
+        let cleared = storage
+            .search_items("", 10, false, SearchExecution::Fast, 3, None)
+            .expect("should load items")
+            .into_iter()
+            .find(|item| item.id == id)
+            .expect("item should still exist");
+        assert!(tags_without_bowl(&cleared.tags).is_empty());
+        assert_eq!(bowl_name_from_tags(&cleared.tags).as_deref(), Some("K8S"));
 
         let _ = fs::remove_file(&storage.db_path);
     }
