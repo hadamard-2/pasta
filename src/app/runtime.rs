@@ -719,10 +719,18 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
 
                 // A file manager copying an image puts only a file *reference*
                 // on the clipboard, so fall back to reading the referenced
-                // file rather than storing its path as text.
-                let clipboard_image = clipboard_image
-                    .map(|image| (image.bytes.clone(), image.format.mime_type().to_owned()))
-                    .or_else(read_clipboard_file_image);
+                // file rather than storing its path as text. That fallback
+                // shells out to `xclip`, so it runs on the background executor
+                // — a slow or stalled selection owner must not block the
+                // foreground executor that drives the UI, hotkey, and quit.
+                let clipboard_image = match clipboard_image {
+                    Some(image) => Some((image.bytes.clone(), image.format.mime_type().to_owned())),
+                    None => {
+                        cx.background_executor()
+                            .spawn(async { read_clipboard_file_image() })
+                            .await
+                    }
+                };
 
                 if let Some((bytes, mime_type)) = clipboard_image {
                     let should_ignore = cx
@@ -744,7 +752,10 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                     if inserted {
                         let _ = cx.update(refresh_launcher_after_clipboard_insert);
                     }
-                } else if let Some(snapshot) = read_clipboard_snapshot()
+                } else if let Some(snapshot) = cx
+                    .background_executor()
+                    .spawn(async { read_clipboard_snapshot() })
+                    .await
                     && !snapshot.is_transient
                 {
                     let should_ignore = cx

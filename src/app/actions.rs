@@ -1010,7 +1010,7 @@ impl LauncherView {
             ),
             CommandItem::new(
                 CommandAction::SetInfo,
-                "Set info note",
+                "Update info note",
                 "info note description annotate",
             ),
             CommandItem::new(

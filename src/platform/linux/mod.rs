@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
@@ -87,11 +87,22 @@ struct WaylandClipboardMonitorState {
 static CLIPBOARD_CHANGE_STATE: OnceLock<Mutex<ClipboardChangeState>> = OnceLock::new();
 static WAYLAND_CLIPBOARD_CHANGE_COUNT: AtomicI64 = AtomicI64::new(0);
 static WAYLAND_CLIPBOARD_MONITOR_START: OnceLock<()> = OnceLock::new();
+static X11_CLIPBOARD_CHANGE_COUNT: AtomicI64 = AtomicI64::new(0);
+static X11_CLIPBOARD_MONITOR_START: OnceLock<()> = OnceLock::new();
+/// Set once the XFIXES monitor has selected for selection events. Until then
+/// (and permanently, if XFIXES is unavailable) the X11 branch of
+/// [`clipboard_change_count`] keeps using the subprocess polling fallback.
+static X11_CLIPBOARD_MONITOR_READY: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn clipboard_change_count() -> i64 {
     if is_wayland_session() {
         ensure_wayland_clipboard_monitor();
         return WAYLAND_CLIPBOARD_CHANGE_COUNT.load(Ordering::Acquire);
+    }
+
+    ensure_x11_clipboard_monitor();
+    if X11_CLIPBOARD_MONITOR_READY.load(Ordering::Acquire) {
+        return X11_CLIPBOARD_CHANGE_COUNT.load(Ordering::Acquire);
     }
 
     polling_clipboard_change_count()
@@ -119,6 +130,87 @@ impl ClipboardManager {
         match self {
             Self::Zwlr(manager) => ClipboardDevice::Zwlr(manager.get_data_device(seat, qh, ())),
             Self::Ext(manager) => ClipboardDevice::Ext(manager.get_data_device(seat, qh, ())),
+        }
+    }
+}
+
+/// X11 counterpart to [`ensure_wayland_clipboard_monitor`]: a dedicated thread
+/// that sits on XFIXES selection notifications instead of polling `xclip`.
+fn ensure_x11_clipboard_monitor() {
+    X11_CLIPBOARD_MONITOR_START.get_or_init(|| {
+        std::thread::Builder::new()
+            .name("pasta-x11-clipboard-monitor".to_owned())
+            .spawn(move || {
+                if let Err(err) = run_x11_clipboard_monitor() {
+                    eprintln!(
+                        "warning: X11 clipboard monitor unavailable ({err}); falling back to polling"
+                    );
+                }
+            })
+            .unwrap_or_else(|err| {
+                panic!("failed to spawn X11 clipboard monitor thread: {err}");
+            });
+    });
+}
+
+fn run_x11_clipboard_monitor() -> Result<(), String> {
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::Event;
+    use x11rb::protocol::xfixes::{ConnectionExt as _, SelectionEventMask};
+    use x11rb::protocol::xproto::ConnectionExt as _;
+
+    // Own connection: GPUI's and the window helpers' connections are used from
+    // other threads and must not be blocked on this event loop.
+    let (conn, screen_num) = x11rb::connect(None).map_err(|err| err.to_string())?;
+    let root = conn
+        .setup()
+        .roots
+        .get(screen_num)
+        .ok_or_else(|| "no screen for X11 connection".to_owned())?
+        .root;
+
+    // x11rb requires the XFIXES version handshake before any other XFIXES
+    // request; without it the extension rejects what follows.
+    conn.xfixes_query_version(5, 0)
+        .map_err(|err| err.to_string())?
+        .reply()
+        .map_err(|err| err.to_string())?;
+
+    let clipboard_atom = conn
+        .intern_atom(false, b"CLIPBOARD")
+        .map_err(|err| err.to_string())?
+        .reply()
+        .map_err(|err| err.to_string())?
+        .atom;
+
+    // The destroy/close masks matter as much as the ownership one: they fire
+    // when a selection owner dies, which is exactly the case that used to
+    // strand a blocking `xclip -o` forever.
+    conn.xfixes_select_selection_input(
+        root,
+        clipboard_atom,
+        SelectionEventMask::SET_SELECTION_OWNER
+            | SelectionEventMask::SELECTION_WINDOW_DESTROY
+            | SelectionEventMask::SELECTION_CLIENT_CLOSE,
+    )
+    .map_err(|err| err.to_string())?
+    .check()
+    .map_err(|err| err.to_string())?;
+
+    X11_CLIPBOARD_MONITOR_READY.store(true, Ordering::Release);
+
+    loop {
+        match conn.wait_for_event() {
+            Ok(Event::XfixesSelectionNotify(_)) => {
+                X11_CLIPBOARD_CHANGE_COUNT.fetch_add(1, Ordering::AcqRel);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                // Connection loss: report once and let the thread end. The
+                // watcher keeps ticking; it just stops seeing new counts.
+                X11_CLIPBOARD_MONITOR_READY.store(false, Ordering::Release);
+                return Err(err.to_string());
+            }
         }
     }
 }
@@ -2017,35 +2109,88 @@ fn pasta_tray_icon() -> Icon {
     }
 }
 
+static COMMAND_EXISTS_CACHE: OnceLock<Mutex<std::collections::HashMap<String, bool>>> =
+    OnceLock::new();
+
+/// Whether `program` is on `PATH`. Cached per program: this used to spawn an
+/// `sh -lc` on every call, several times per clipboard read.
 fn command_exists(program: &str) -> bool {
-    std::process::Command::new("sh")
+    let cache = COMMAND_EXISTS_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Some(found) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(program)
+    {
+        return *found;
+    }
+
+    let found = std::process::Command::new("sh")
         .arg("-lc")
         .arg(format!("command -v {program} >/dev/null 2>&1"))
         .status()
         .map(|status| status.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(program.to_owned(), found);
+    found
 }
 
+/// Upper bound on how long a clipboard-reading subprocess may take. X11
+/// selection transfer has no protocol-level timeout, so a selection owner that
+/// stalls or exits mid-request leaves `xclip -o` blocked forever. Anything
+/// slower than this is treated as a missed clipboard entry rather than allowed
+/// to wedge the caller.
+const CLIPBOARD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
+
 fn read_via_command(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8(output.stdout).ok()
+    String::from_utf8(read_via_command_bytes(program, args)?).ok()
 }
 
 fn read_via_command_bytes(program: &str, args: &[&str]) -> Option<Vec<u8>> {
-    let output = std::process::Command::new(program)
+    let mut child = std::process::Command::new(program)
         .args(args)
-        .output()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
+
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    // Read the pipe on a helper thread so the deadline below covers the read
+    // as well as the exit. The thread ends on its own once we kill the child.
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let result = stdout.read_to_end(&mut buf).map(|_| buf);
+        let _ = tx.send(result);
+    });
+
+    let deadline = Instant::now() + CLIPBOARD_READ_TIMEOUT;
+    let Ok(Ok(bytes)) = rx.recv_timeout(CLIPBOARD_READ_TIMEOUT) else {
+        let _ = child.kill();
+        let _ = child.wait();
         return None;
+    };
+
+    // Output is in hand; give the process the rest of the budget to report its
+    // exit status, then stop waiting for it either way.
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success().then_some(bytes),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Some(bytes);
+            }
+            Err(_) => return None,
+        }
     }
-    Some(output.stdout)
 }
 
 fn write_via_command(program: &str, args: &[&str], value: &str) -> Result<(), String> {
@@ -2102,6 +2247,24 @@ mod tests {
         assert_eq!(
             first_local_file_from_uri_payload(payload),
             Some(PathBuf::from("/home/user/My Photos/café + tea.png"))
+        );
+    }
+
+    #[test]
+    fn bounded_read_gives_up_on_a_command_that_never_returns() {
+        // Stands in for `xclip -o` against a selection owner that never
+        // replies: the caller must come back promptly with no value rather
+        // than block forever.
+        let started = Instant::now();
+        assert_eq!(read_via_command_bytes("sleep", &["30"]), None);
+        assert!(started.elapsed() < CLIPBOARD_READ_TIMEOUT * 4);
+    }
+
+    #[test]
+    fn bounded_read_still_returns_prompt_output() {
+        assert_eq!(
+            read_via_command("printf", &["clipboard-text"]).as_deref(),
+            Some("clipboard-text")
         );
     }
 
