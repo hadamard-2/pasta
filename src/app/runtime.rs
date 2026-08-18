@@ -629,6 +629,9 @@ fn refresh_launcher_after_clipboard_insert(cx: &mut App) {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
+    // Work out up front whether capture can work at all, so the launcher can
+    // say so instead of showing an empty history that looks like a bug.
+    probe_clipboard_capture();
     let storage = cx.global::<StorageState>().storage.clone();
 
     cx.spawn(async move |cx| {
@@ -724,6 +727,9 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
+    // Work out up front whether capture can work at all, so the launcher can
+    // say so instead of showing an empty history that looks like a bug.
+    probe_clipboard_capture();
     let storage = cx.global::<StorageState>().storage.clone();
 
     cx.spawn(async move |cx| {

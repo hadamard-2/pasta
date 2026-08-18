@@ -11,7 +11,8 @@ mod touch_id;
 mod window;
 
 pub(crate) use clipboard::{
-    clipboard_change_count, clipboard_text_hash, parse_custom_tags_input, process_secret_autoclear,
+    clipboard_capture_unavailable_reason, clipboard_change_count, clipboard_text_hash,
+    parse_custom_tags_input, probe_clipboard_capture, process_secret_autoclear,
     read_clipboard_snapshot, should_ignore_self_clipboard_write, show_macos_notification,
 };
 pub(crate) use files::{choose_bowl_export_path, choose_bowl_import_path};

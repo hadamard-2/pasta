@@ -314,3 +314,12 @@ pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, bytes: &[u8]) -> 
 
     false
 }
+
+/// macOS has no equivalent failure mode — the pasteboard is always readable, so
+/// capture is never blocked. Exists to match the Linux platform surface.
+pub(crate) fn clipboard_capture_unavailable_reason() -> Option<String> {
+    None
+}
+
+/// No-op counterpart to the Linux probe.
+pub(crate) fn probe_clipboard_capture() {}
