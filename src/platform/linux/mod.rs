@@ -34,7 +34,10 @@ use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_device_v1
 };
 use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1;
 use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_offer_v1::ZwlrDataControlOfferV1;
+mod global_shortcuts;
 mod polkit;
+
+pub(crate) use global_shortcuts::{PortalOutcome, run_show_launcher_shortcut};
 
 use wl_clipboard_rs::copy::{MimeType as CopyMimeType, Options as CopyOptions, Source};
 use wl_clipboard_rs::paste::{
@@ -669,7 +672,9 @@ pub(crate) fn choose_bowl_import_path(_prompt: &str) -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn setup_hotkey(_cx: &mut App) {
-    // Registration happens in the Linux runtime listener.
+    // Registration happens in the Linux runtime listener: the desktop portal
+    // owns the binding (see `global_shortcuts`), with an evdev listener as the
+    // fallback when no portal backend implements GlobalShortcuts.
 }
 
 // ---------------------------------------------------------------------------

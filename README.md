@@ -93,7 +93,16 @@ The install script builds the release binary, drops a `.desktop` entry and icon 
 
 Global hotkey is `Meta + Space`. Tray icon requires a StatusNotifierItem host (built-in on KDE, `gnome-shell-extension-appindicator` on GNOME).
 
-**Hotkey needs input access — or bind it yourself.** Pasta detects `Meta + Space` by reading `/dev/input` directly, which requires your user to be in the `input` group: `sudo usermod -aG input $USER`, then log out and back in. If you'd rather not grant that (membership lets any process you run read all keyboard and mouse input), skip it and bind the launcher to a desktop shortcut instead: `pasta-launcher --show` opens the launcher of the running instance, so map that command to a key in GNOME Settings → Keyboard → Custom Shortcuts (or your desktop's equivalent). Pasta is single-instance — launching it again, or running `pasta-launcher --show` when it is already open, surfaces the existing window instead of starting a second copy; if no instance is running yet, `--show` starts one.
+**The hotkey asks your desktop for permission, once.** Pasta registers `Meta + Space` through the `org.freedesktop.portal.GlobalShortcuts` desktop portal, so the compositor performs the key grab — no special permissions, and it works the same on Wayland and X11. GNOME, KDE, and Hyprland implement it. The first launch after installing shows a permission dialog; approve it and Pasta re-registers silently on every launch after that. This needs Pasta's `.desktop` entry to be installed (the install script and the `.deb`/`.rpm` all do it) — the portal identifies apps by it, and GNOME refuses the request without one. If your desktop already uses `Super + Space` for something else, the desktop's own binding wins and Pasta's shortcut silently never fires. GNOME is affected out of the box — it binds `<Super>space` to input-source switching, and so does ibus. To give the key to Pasta, clear both and restart Pasta (the key grab is taken when Pasta registers, so clearing the setting alone is not enough):
+
+```bash
+gsettings set org.gnome.desktop.wm.keybindings switch-input-source "[]"
+gsettings set org.freedesktop.ibus.general.hotkey triggers "[]"
+```
+
+Pasta will not change these for you — they are desktop-wide settings that affect every app.
+
+**If your desktop has no GlobalShortcuts portal**, Pasta falls back to reading `/dev/input` directly, which requires your user to be in the `input` group: `sudo usermod -aG input $USER`, then log out and back in. Membership lets any process you run read all keyboard and mouse input, so if you'd rather not grant it, skip it and bind the launcher to a desktop shortcut instead: `pasta-launcher --show` opens the launcher of the running instance, so map that command to a key in GNOME Settings → Keyboard → Custom Shortcuts (or your desktop's equivalent). Pasta is single-instance — launching it again, or running `pasta-launcher --show` when it is already open, surfaces the existing window instead of starting a second copy; if no instance is running yet, `--show` starts one.
 
 **Launcher occasionally opens top-left instead of centered (GNOME/X11).** Pasta positions the window itself to work around a Mutter placement quirk, but the fix races the window's creation and misses on a small fraction of launches. If you'd rather have GNOME guarantee centering for every app (not just Pasta), run `gsettings set org.gnome.mutter center-new-windows true` — this is a desktop-wide setting Pasta won't set for you.
 

@@ -40,9 +40,54 @@ Two things worth knowing before you touch it:
 
 `try_apply_kde_wayland_blur` uses the KWin protocol `org_kde_kwin_blur`. It early-returns unless the session is Wayland **and** the compositor is KWin (the blur-manager bind fails otherwise). So blur only appears on **KDE Plasma + Wayland**. On X11 (any DE) or GNOME/wlroots Wayland it silently does nothing. This is a compositor limitation, not a missing setting — worth stating plainly since the README advertises blur without that caveat.
 
-## Global hotkey (Meta+Space) needs /dev/input access
+## Global hotkey: desktop portal first, evdev fallback
 
-`setup_hotkey` is a stub; the real listener is `spawn_hotkey_listener` in `src/app/runtime.rs`, which reads `/dev/input/event*` directly via evdev (it does **not** go through the compositor). That requires read access to those device nodes, normally via membership in the `input` group (`sudo usermod -aG input $USER`, then re-login). If it can't open any keyboard it prints one warning to stderr and silently does nothing. The permission-free alternative is `pasta-launcher --show` bound to a desktop shortcut (see below). Trade-off to note: `input`-group membership gives any process you run keylogger-grade access to all input devices.
+`setup_hotkey` is still a stub. The dispatch lives in `spawn_hotkey_listener` (`src/app/runtime.rs`), which spawns one `pasta-hotkey` thread and picks **one** of two mechanisms:
+
+1. **`org.freedesktop.portal.GlobalShortcuts`** (`src/platform/linux/global_shortcuts.rs`) — the compositor performs the grab and tells us over D-Bus when it fires. No elevated permissions, same code on Wayland and X11, and the binding is visible to the desktop instead of being an invisible keyboard tap. Implemented by GNOME (xdg-desktop-portal-gnome), KDE, and Hyprland.
+2. **evdev on `/dev/input/event*`** — the original mechanism, kept as the fallback for desktops whose portal backend has no GlobalShortcuts implementation. Needs read access to the device nodes, normally via `input`-group membership (`sudo usermod -aG input $USER`, then re-login), which gives *any* process you run keylogger-grade access to all input devices.
+
+**Never both.** The evdev listener only starts when the portal reports itself unavailable; running both would open the launcher twice per keypress.
+
+### The portal exchange, and why it is shaped this way
+
+`run_show_launcher_shortcut` does `CreateSession` → `ListShortcuts` → `BindShortcuts` → loop on `Activated`. Things that are not obvious from the call list:
+
+- **The session dies with the D-Bus connection.** There is no way to register a shortcut and walk away; the thread holds the `zbus` connection open for the life of the process. If that thread returns, the shortcut is gone.
+- **`ListShortcuts` runs before `BindShortcuts` on purpose.** The spec allows only one bind attempt per session, and backends that prompt would prompt again. `ListShortcuts` reports what this app bound in a *previous* run, so an already-bound shortcut skips the bind entirely. On GNOME this list always comes back empty (see below) — it is KDE where it earns its place.
+- **The wait for the `BindShortcuts` response is deliberately unbounded.** That response only arrives after the user answers the permission dialog, and 21 s of "nothing happening" is a person reading a dialog, not a wedge. It is safe because the wait is on a dedicated thread that nothing else joins on. The pre-bind calls are bounded by zbus's default 25 s method timeout.
+- **`preferred_trigger` is `LOGO+space`**, in the syntax of the [shortcuts spec](https://specifications.freedesktop.org/shortcuts/latest/): modifiers are the `XKB_MOD_NAME_*` names (so `LOGO`, never `SUPER` or `META`) and the key is an xkbcommon keysym name minus the `XKB_KEY_` prefix (so `space`, lowercase). It is only a *preference* — the granted trigger is read back out of the response's `trigger_description`, which is also what the startup log line reports.
+- **A success response that does not list our shortcut id counts as a refusal.** The portal is allowed to return a subset of what was requested, including the empty set, so "response code 0" alone does not mean we got the shortcut.
+
+### App id: why we call `org.freedesktop.host.portal.Registry`
+
+Unsandboxed processes have no app identity, and the portal keys shortcut permissions by app id. `register_app_id` calls `Register("com.pasta.launcher")` — which must happen **before any other portal call on that connection** — so the grant is attributed to Pasta.
+
+It only works when the portal can resolve that id to an *installed* `com.pasta.launcher.desktop` (what `scripts/install-linux-app.sh` and the `.deb`/`.rpm` install). Running from a build tree it fails with `App info not found for 'com.pasta.launcher'`, which is harmless — the portal falls back to treating us as an anonymous host app — but it means **a dev-tree build and an installed build get different permission behavior**. Don't conclude anything about prompting from `cargo run` alone.
+
+### Verified GNOME 50 behavior (xdg-desktop-portal 1.22, GlobalShortcuts version 1)
+
+- **The installed desktop entry is a hard requirement.** With no `com.pasta.launcher.desktop` in the XDG data dirs, `Register` fails with `App info not found` and `CreateSession` is then refused outright: `org.freedesktop.portal.Error.NotAllowed: An app id is required`. Pasta falls back to evdev and says so. This is the normal state of a `cargo run` build, so **the portal path cannot be exercised from a bare build tree** — install with `scripts/install-linux-app.sh` (or point a `.desktop` at your debug binary) before testing it. Early in development an anonymous session was accepted a dozen times and then refused consistently for the rest of the session, so do not treat a working anonymous run as evidence that the app id is optional.
+- With the entry installed, the **first** `BindShortcuts` shows a permission dialog — measured at 21.3 s between call and response, which is a person reading a dialog, not a hang. Every launch after that re-binds in ~21 ms with **no** dialog: the permission is remembered per app id.
+- `ListShortcuts` returns an empty array on GNOME even after a successful bind, so Pasta re-binds on every launch. That is only tolerable because the re-bind is silent; on a backend that prompts, `ListShortcuts` is what prevents a prompt per launch.
+- The grant is **not** in the xdg-desktop-portal permission store (`List "globalshortcuts"` is empty) and was not found on disk, so treat "does it survive a logout?" as unverified.
+- **A built-in Mutter keybinding beats a portal-granted shortcut, silently.** GNOME ships `<Super>space` on `org.gnome.desktop.wm.keybindings switch-input-source` (and ibus ships it again on `org.freedesktop.ibus.general.hotkey triggers`). The portal still reports `Press <Super>space` as granted and `BindShortcuts` still returns success — but **no `Activated` signal is ever emitted**. With a single input source configured the switcher does nothing visible either, so the key press vanishes with no feedback anywhere. This was verified end to end: with both settings cleared, five presses produced five `Activated` signals and five launcher opens; with them restored, zero.
+
+  Two consequences worth knowing. First, this is the price of behaving correctly — the old evdev listener "worked" here only because it read raw device nodes and never consulted the compositor, which no portal client can do. Second, **clearing the conflict requires restarting Pasta**: the grab is taken at `BindShortcuts` time, so a shortcut bound while Mutter still owned the key stays dead even after the setting is cleared. The opt-in fix, which Pasta must never apply itself (see the rule about desktop-wide settings below):
+
+  ```bash
+  gsettings set org.gnome.desktop.wm.keybindings switch-input-source "[]"
+  gsettings set org.freedesktop.ibus.general.hotkey triggers "[]"
+  # then restart Pasta so it re-binds with the key free
+  ```
+
+### Debugging the portal path
+
+- **Watch the exchange live**: `dbus-monitor --session "type='signal',interface='org.freedesktop.portal.Request'" "type='method_call',interface='org.freedesktop.portal.GlobalShortcuts'"`. The gap between the `BindShortcuts` call and its `Response` is exactly how long a dialog sat unanswered.
+- **Confirm the session exists**: `busctl --user tree org.freedesktop.portal.Desktop` lists a `.../session/<sender>/pasta_session_<pid>_<n>` node while Pasta holds one.
+- **Confirm the backend implements it at all**: `busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.GlobalShortcuts version`. This is the same call Pasta uses to decide whether to fall back, so a failure here is a fallback in production.
+- **Two instances fight over the shortcut id.** A second process binding `pasta-show-launcher` while the first still holds it can leave the second's `BindShortcuts` hanging with no response. The single-instance `flock` prevents this in production; in development it is easy to hit by leaving a test client running. Check for strays before concluding the code is at fault.
+- Absence of the `pasta: global shortcut registered with the desktop portal (…)` line on stderr is the signal that the portal path did not complete.
 
 ## Single-instance guard + `--show` trigger
 
