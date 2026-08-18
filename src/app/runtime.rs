@@ -452,8 +452,48 @@ pub(crate) fn spawn_hotkey_listener(cx: &mut App) {
     .detach();
 }
 
+/// Linux global hotkey. Two very different mechanisms, tried in order:
+///
+/// 1. The `org.freedesktop.portal.GlobalShortcuts` desktop portal, where the
+///    compositor performs the key grab on our behalf (see
+///    `platform::linux::global_shortcuts`). Needs no elevated permissions,
+///    behaves the same on Wayland and X11, and is the only thing that can work
+///    under a compositor that — correctly — refuses to let clients snoop the
+///    keyboard.
+/// 2. Reading `/dev/input/event*` directly with evdev. This predates the portal
+///    and is still the only option on desktops whose portal backend has no
+///    GlobalShortcuts implementation. It needs read access to the device nodes,
+///    normally via `input`-group membership.
+///
+/// Only one of them ever runs: the evdev listener starts only when the portal
+/// is unavailable, so a single key press can never open the launcher twice.
 #[cfg(target_os = "linux")]
 pub(crate) fn spawn_hotkey_listener(_cx: &mut App) {
+    let Some(menu_tx) = MENU_COMMAND_TX.get().cloned() else {
+        eprintln!("warning: hotkey listener unavailable: menu command channel not initialized");
+        return;
+    };
+
+    // The portal handshake can block indefinitely on a permission dialog, so
+    // this whole decision lives off the main thread.
+    std::thread::Builder::new()
+        .name("pasta-hotkey".into())
+        .spawn(move || match run_show_launcher_shortcut(&menu_tx) {
+            PortalOutcome::Handled => {}
+            PortalOutcome::Unavailable(reason) => {
+                eprintln!(
+                    "warning: desktop portal global shortcut unavailable ({reason}); falling back to reading /dev/input"
+                );
+                run_evdev_hotkey_listener(&menu_tx);
+            }
+        })
+        .ok();
+}
+
+/// Fallback hotkey listener: watch every readable keyboard in `/dev/input` for
+/// Meta+Space. Runs on the calling thread until it loses device access.
+#[cfg(target_os = "linux")]
+fn run_evdev_hotkey_listener(menu_tx: &mpsc::Sender<MenuCommand>) {
     use evdev::{Device, InputEventKind, Key};
     use nix::fcntl::{FcntlArg, OFlag, fcntl};
     use std::os::fd::AsRawFd;
@@ -504,79 +544,72 @@ pub(crate) fn spawn_hotkey_listener(_cx: &mut App) {
         Ok(())
     }
 
-    let Some(menu_tx) = MENU_COMMAND_TX.get().cloned() else {
-        eprintln!("warning: hotkey listener unavailable: menu command channel not initialized");
+    let mut keyboards = open_keyboards();
+    if keyboards.is_empty() {
+        eprintln!(
+            "warning: global Meta+Space hotkey unavailable: no readable keyboards in /dev/input (check input-group membership or device permissions)"
+        );
         return;
-    };
+    }
+    if let Err(err) = set_nonblocking(&keyboards) {
+        eprintln!("warning: failed to initialize Linux hotkey listener: {err}");
+        return;
+    }
 
-    std::thread::spawn(move || {
-        let mut keyboards = open_keyboards();
-        if keyboards.is_empty() {
-            eprintln!(
-                "warning: global Meta+Space hotkey unavailable: no readable keyboards in /dev/input (check input-group membership or device permissions)"
-            );
-            return;
-        }
-        if let Err(err) = set_nonblocking(&keyboards) {
-            eprintln!("warning: failed to initialize Linux hotkey listener: {err}");
-            return;
-        }
+    let mut meta_pressed = false;
 
-        let mut meta_pressed = false;
+    loop {
+        let mut had_input_error = false;
 
-        loop {
-            let mut had_input_error = false;
+        for keyboard in &mut keyboards {
+            match keyboard.fetch_events() {
+                Ok(events) => {
+                    for event in events {
+                        if let InputEventKind::Key(key) = event.kind() {
+                            let is_press = event.value() == 1;
+                            let is_release = event.value() == 0;
 
-            for keyboard in &mut keyboards {
-                match keyboard.fetch_events() {
-                    Ok(events) => {
-                        for event in events {
-                            if let InputEventKind::Key(key) = event.kind() {
-                                let is_press = event.value() == 1;
-                                let is_release = event.value() == 0;
-
-                                if key == Key::KEY_LEFTMETA || key == Key::KEY_RIGHTMETA {
-                                    if is_press {
-                                        meta_pressed = true;
-                                    } else if is_release {
-                                        meta_pressed = false;
-                                    }
-                                    continue;
+                            if key == Key::KEY_LEFTMETA || key == Key::KEY_RIGHTMETA {
+                                if is_press {
+                                    meta_pressed = true;
+                                } else if is_release {
+                                    meta_pressed = false;
                                 }
+                                continue;
+                            }
 
-                                if key == Key::KEY_SPACE && is_press && meta_pressed {
-                                    let _ = menu_tx.send(MenuCommand::ShowLauncher);
-                                }
+                            if key == Key::KEY_SPACE && is_press && meta_pressed {
+                                let _ = menu_tx.send(MenuCommand::ShowLauncher);
                             }
                         }
                     }
-                    Err(err) => {
-                        let raw = err.raw_os_error();
-                        if raw != Some(nix::libc::EAGAIN) && raw != Some(nix::libc::EWOULDBLOCK) {
-                            had_input_error = true;
-                        }
+                }
+                Err(err) => {
+                    let raw = err.raw_os_error();
+                    if raw != Some(nix::libc::EAGAIN) && raw != Some(nix::libc::EWOULDBLOCK) {
+                        had_input_error = true;
                     }
                 }
             }
-
-            if had_input_error {
-                keyboards = open_keyboards();
-                if keyboards.is_empty() {
-                    eprintln!(
-                        "warning: Linux hotkey listener lost access to keyboard devices; stopping listener"
-                    );
-                    return;
-                }
-                if let Err(err) = set_nonblocking(&keyboards) {
-                    eprintln!("warning: failed to recover Linux hotkey listener: {err}");
-                    return;
-                }
-                meta_pressed = false;
-            }
-
-            std::thread::sleep(Duration::from_millis(12));
         }
-    });
+
+        if had_input_error {
+            keyboards = open_keyboards();
+            if keyboards.is_empty() {
+                eprintln!(
+                    "warning: Linux hotkey listener lost access to keyboard devices; stopping listener"
+                );
+                return;
+            }
+            if let Err(err) = set_nonblocking(&keyboards) {
+                eprintln!("warning: failed to recover Linux hotkey listener: {err}");
+                return;
+            }
+            meta_pressed = false;
+        }
+
+        std::thread::sleep(Duration::from_millis(12));
+    }
 }
 
 /// Refreshes the launcher's result list after a clipboard watcher insert, if
@@ -596,6 +629,9 @@ fn refresh_launcher_after_clipboard_insert(cx: &mut App) {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
+    // Work out up front whether capture can work at all, so the launcher can
+    // say so instead of showing an empty history that looks like a bug.
+    probe_clipboard_capture();
     let storage = cx.global::<StorageState>().storage.clone();
 
     cx.spawn(async move |cx| {
@@ -691,6 +727,9 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
+    // Work out up front whether capture can work at all, so the launcher can
+    // say so instead of showing an empty history that looks like a bug.
+    probe_clipboard_capture();
     let storage = cx.global::<StorageState>().storage.clone();
 
     cx.spawn(async move |cx| {

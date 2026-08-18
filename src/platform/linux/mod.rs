@@ -34,7 +34,10 @@ use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_device_v1
 };
 use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1;
 use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_offer_v1::ZwlrDataControlOfferV1;
+mod global_shortcuts;
 mod polkit;
+
+pub(crate) use global_shortcuts::{PortalOutcome, run_show_launcher_shortcut};
 
 use wl_clipboard_rs::copy::{MimeType as CopyMimeType, Options as CopyOptions, Source};
 use wl_clipboard_rs::paste::{
@@ -215,6 +218,99 @@ fn run_x11_clipboard_monitor() -> Result<(), String> {
     }
 }
 
+/// Why the clipboard monitor could not start. The missing-protocol case is
+/// called out separately because it is not a transient failure — it means this
+/// compositor will never support clipboard capture, which is something the user
+/// deserves to be told rather than left to infer from an empty history.
+enum ClipboardMonitorError {
+    MissingProtocol,
+    Other(String),
+}
+
+impl From<String> for ClipboardMonitorError {
+    fn from(err: String) -> Self {
+        Self::Other(err)
+    }
+}
+
+impl std::fmt::Display for ClipboardMonitorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingProtocol => {
+                f.write_str("missing ext-data-control / wlr-data-control protocol")
+            }
+            Self::Other(err) => f.write_str(err),
+        }
+    }
+}
+
+/// Set once we know clipboard capture cannot work here. Read by the launcher so
+/// an empty history explains itself instead of looking like a broken app.
+fn clipboard_capture_block() -> &'static Mutex<Option<String>> {
+    static BLOCK: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    BLOCK.get_or_init(|| Mutex::new(None))
+}
+
+/// First reason wins: the earliest failure is the root cause, and later ones
+/// are usually just consequences of it.
+fn keep_first_reason(current: &mut Option<String>, reason: String) {
+    if current.is_none() {
+        *current = Some(reason);
+    }
+}
+
+fn set_clipboard_capture_blocked(reason: String) {
+    let mut guard = clipboard_capture_block()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    keep_first_reason(&mut guard, reason);
+}
+
+/// A user-facing explanation of why nothing is being captured, or `None` when
+/// capture is working (or has not failed yet).
+pub(crate) fn clipboard_capture_unavailable_reason() -> Option<String> {
+    clipboard_capture_block()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// Explanation for a Wayland monitor that refused to start.
+fn wayland_capture_block_reason(err: &ClipboardMonitorError) -> String {
+    match err {
+        ClipboardMonitorError::MissingProtocol => "This desktop's compositor does not implement the clipboard protocol Pasta needs (ext-data-control / wlr-data-control), so copies cannot be captured. KDE Plasma, Sway and Hyprland support it; GNOME does not.".to_owned(),
+        ClipboardMonitorError::Other(err) => {
+            format!("The Wayland clipboard monitor could not start: {err}")
+        }
+    }
+}
+
+/// Explanation for an X11 session with no way to read the selection. The
+/// XFIXES monitor still reports *that* the clipboard changed, so without this
+/// check Pasta would keep noticing changes it can never read — the most
+/// confusing possible failure.
+fn x11_capture_block_reason(has_xclip: bool, has_xsel: bool) -> Option<String> {
+    if has_xclip || has_xsel {
+        return None;
+    }
+    Some(
+        "Pasta reads the X11 clipboard through xclip or xsel, and neither is installed. Install one of them and restart Pasta.".to_owned(),
+    )
+}
+
+/// Check the parts of clipboard capture we can know about up front. The Wayland
+/// monitor reports itself asynchronously when its thread fails to start.
+pub(crate) fn probe_clipboard_capture() {
+    if is_wayland_session() {
+        return;
+    }
+    if let Some(reason) = x11_capture_block_reason(command_exists("xclip"), command_exists("xsel"))
+    {
+        eprintln!("warning: {reason}");
+        set_clipboard_capture_blocked(reason);
+    }
+}
+
 fn ensure_wayland_clipboard_monitor() {
     WAYLAND_CLIPBOARD_MONITOR_START.get_or_init(|| {
         std::thread::Builder::new()
@@ -222,6 +318,7 @@ fn ensure_wayland_clipboard_monitor() {
             .spawn(move || {
                 if let Err(err) = run_wayland_clipboard_monitor() {
                     eprintln!("warning: failed to start Wayland clipboard monitor: {err}");
+                    set_clipboard_capture_blocked(wayland_capture_block_reason(&err));
                 }
             })
             .unwrap_or_else(|err| {
@@ -230,7 +327,7 @@ fn ensure_wayland_clipboard_monitor() {
     });
 }
 
-fn run_wayland_clipboard_monitor() -> Result<(), String> {
+fn run_wayland_clipboard_monitor() -> Result<(), ClipboardMonitorError> {
     let conn = Connection::connect_to_env().map_err(|err| err.to_string())?;
     let (globals, mut queue) = registry_queue_init::<WaylandClipboardMonitorState>(&conn)
         .map_err(|err| err.to_string())?;
@@ -246,7 +343,7 @@ fn run_wayland_clipboard_monitor() -> Result<(), String> {
                 .ok()
                 .map(ClipboardManager::Zwlr)
         })
-        .ok_or_else(|| "missing ext-data-control / wlr-data-control protocol".to_owned())?;
+        .ok_or(ClipboardMonitorError::MissingProtocol)?;
 
     let registry = globals.registry();
     let seats: Vec<WlSeat> = globals.contents().with_list(|globals| {
@@ -258,7 +355,9 @@ fn run_wayland_clipboard_monitor() -> Result<(), String> {
     });
 
     if seats.is_empty() {
-        return Err("no Wayland seats available for clipboard monitor".to_owned());
+        return Err(ClipboardMonitorError::Other(
+            "no Wayland seats available for clipboard monitor".to_owned(),
+        ));
     }
 
     let mut state = WaylandClipboardMonitorState {
@@ -669,7 +768,9 @@ pub(crate) fn choose_bowl_import_path(_prompt: &str) -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn setup_hotkey(_cx: &mut App) {
-    // Registration happens in the Linux runtime listener.
+    // Registration happens in the Linux runtime listener: the desktop portal
+    // owns the binding (see `global_shortcuts`), with an evdev listener as the
+    // fallback when no portal backend implements GlobalShortcuts.
 }
 
 // ---------------------------------------------------------------------------
@@ -2258,6 +2359,47 @@ mod tests {
         let started = Instant::now();
         assert_eq!(read_via_command_bytes("sleep", &["30"]), None);
         assert!(started.elapsed() < CLIPBOARD_READ_TIMEOUT * 4);
+    }
+
+    #[test]
+    fn x11_without_a_clipboard_reader_is_reported_as_blocked() {
+        let reason = x11_capture_block_reason(false, false).expect("blocked");
+        assert!(reason.contains("xclip"));
+        assert!(reason.contains("xsel"));
+    }
+
+    #[test]
+    fn x11_with_either_reader_is_not_blocked() {
+        assert!(x11_capture_block_reason(true, false).is_none());
+        assert!(x11_capture_block_reason(false, true).is_none());
+        assert!(x11_capture_block_reason(true, true).is_none());
+    }
+
+    #[test]
+    fn missing_protocol_names_the_compositors_that_do_support_it() {
+        let reason = wayland_capture_block_reason(&ClipboardMonitorError::MissingProtocol);
+        assert!(reason.contains("KDE Plasma"));
+        assert!(reason.contains("GNOME"));
+        // The raw protocol names matter: they are what a user searches for.
+        assert!(reason.contains("ext-data-control"));
+    }
+
+    #[test]
+    fn other_monitor_errors_are_passed_through_verbatim() {
+        let reason = wayland_capture_block_reason(&ClipboardMonitorError::Other(
+            "no Wayland seats available for clipboard monitor".to_owned(),
+        ));
+        assert!(reason.contains("no Wayland seats available"));
+    }
+
+    #[test]
+    fn the_first_capture_block_reason_wins() {
+        // Deliberately not exercised through the process-global store: a test
+        // that mutates it is order-dependent against every other test.
+        let mut reason = None;
+        keep_first_reason(&mut reason, "root cause".to_owned());
+        keep_first_reason(&mut reason, "later consequence".to_owned());
+        assert_eq!(reason.as_deref(), Some("root cause"));
     }
 
     #[test]

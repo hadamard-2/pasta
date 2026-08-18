@@ -63,17 +63,31 @@ impl Render for LauncherView {
 
         let pinned_count = self.browse_pinned_count();
         let results = if self.items.is_empty() {
-            div()
+            // An empty history is ambiguous: it means "nothing copied yet" when
+            // capture works, and "this app cannot see your clipboard" when it
+            // does not. Saying which is the difference between a new install
+            // and an app the user concludes is broken.
+            let capture_blocked = clipboard_capture_unavailable_reason();
+            let mut empty_state = div()
                 .id("results-list")
                 .w_full()
                 .h_full()
                 .flex()
+                .flex_col()
                 .items_center()
                 .justify_center()
+                .gap(px(6.0))
                 .text_color(palette.muted_text)
-                .text_sm()
-                .child("Nothing copied yet.")
-                .into_any_element()
+                .text_sm();
+            empty_state = match &capture_blocked {
+                Some(_) => empty_state.child("Clipboard capture is unavailable."),
+                None => empty_state.child("Nothing copied yet."),
+            };
+            if let Some(reason) = capture_blocked {
+                empty_state =
+                    empty_state.child(div().max_w(px(420.0)).text_xs().text_center().child(reason));
+            }
+            empty_state.into_any_element()
         } else if pinned_count > 0 {
             // Browse mode with pins: a fixed "PINNED" section over a scrolling
             // "MOST RECENT" section, each with a compact label.

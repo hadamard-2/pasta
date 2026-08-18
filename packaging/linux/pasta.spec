@@ -36,6 +36,9 @@ Requires:       dbus-libs
 Requires:       libsecret
 
 Recommends:     howdy
+# Supplies the GlobalShortcuts portal the global hotkey registers through; without
+# it Pasta falls back to reading /dev/input, which needs input-group membership.
+Recommends:     xdg-desktop-portal
 Recommends:     polkit-gnome
 Suggests:       gnome-shell-extension-appindicator
 
