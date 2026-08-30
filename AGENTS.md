@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance for coding agents working in this repository.
 
 ## What this is
 
@@ -14,7 +14,7 @@ cargo build                  # dev build (opt-level 1; heavy deps like rusqlite/
 cargo test                   # run the full test suite (unit tests live inline in `#[cfg(test)] mod tests` blocks, no separate tests/ dir)
 cargo test <test_name>       # run a single test by name substring
 cargo fmt --all -- --check   # formatting check (CI-gated)
-cargo clippy --all-targets --no-deps   # lint (CI runs this without -D warnings; ~33 pre-existing cosmetic warnings are tolerated, but don't add new ones)
+cargo clippy --all-targets --no-deps   # lint (CI runs this without -D warnings; pre-existing cosmetic warnings are tolerated, but don't add new ones -- compare the count against main rather than trusting a number written here)
 cargo audit                  # advisory scan (CI job, informational/non-blocking)
 ```
 
