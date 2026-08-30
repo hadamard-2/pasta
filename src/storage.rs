@@ -2079,13 +2079,6 @@ fn classify_clipboard_text_with_mode(
         tags.push("secret".to_owned());
         tags.push("pass".to_owned());
         ClipboardItemType::Password
-    } else if secret_detection_enabled && !looks_base64 && looks_like_high_entropy_secret(text) {
-        tags.push("sensitive".to_owned());
-        tags.push("secret".to_owned());
-        tags.push("pass".to_owned());
-        tags.push("high_entropy".to_owned());
-        tags.push("token".to_owned());
-        ClipboardItemType::Password
     } else if looks_like_command(text) {
         tags.push("shell".to_owned());
         ClipboardItemType::Command
@@ -2291,61 +2284,6 @@ fn looks_like_password(text: &str) -> bool {
 
     let unique_chars: HashSet<char> = text.chars().collect();
     unique_chars.len() * 2 >= len
-}
-
-fn looks_like_high_entropy_secret(text: &str) -> bool {
-    if text.contains(char::is_whitespace) {
-        return false;
-    }
-
-    let value = text.trim();
-    let len = value.chars().count();
-    if !(20..=256).contains(&len) {
-        return false;
-    }
-    if value.starts_with("http://") || value.starts_with("https://") {
-        return false;
-    }
-
-    let mut has_alpha = false;
-    let mut has_digit = false;
-    for ch in value.chars() {
-        if ch.is_ascii_alphabetic() {
-            has_alpha = true;
-        } else if ch.is_ascii_digit() {
-            has_digit = true;
-        } else if !matches!(ch, '-' | '_' | '+' | '=' | '.' | ':' | '/' | '~') {
-            return false;
-        }
-    }
-    if !(has_alpha && has_digit) {
-        return false;
-    }
-
-    shannon_entropy(value.as_bytes()) >= 3.6
-}
-
-fn shannon_entropy(bytes: &[u8]) -> f64 {
-    if bytes.is_empty() {
-        return 0.0;
-    }
-
-    let mut counts = [0_usize; 256];
-    for byte in bytes {
-        counts[*byte as usize] += 1;
-    }
-
-    let len = bytes.len() as f64;
-    let mut entropy = 0.0_f64;
-    for count in counts {
-        if count == 0 {
-            continue;
-        }
-        let p = count as f64 / len;
-        entropy -= p * p.log2();
-    }
-
-    entropy
 }
 
 fn looks_like_url(text: &str) -> bool {
