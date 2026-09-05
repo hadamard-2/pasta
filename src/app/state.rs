@@ -59,13 +59,21 @@ impl TextInputState {
 
 pub(crate) struct CachedRowPresentation {
     pub(crate) title: String,
-    pub(crate) created_label: String,
+    /// Relative time shown in the row's trailing slot. Tracks `last_used_at`, so
+    /// it agrees with the order the list is sorted in; the preview pane still
+    /// reports the true capture time.
+    pub(crate) recency_label: String,
     pub(crate) detected_language: Option<LanguageTag>,
     pub(crate) collapsed_preview: String,
     pub(crate) expanded_preview: String,
     pub(crate) expanded_preview_line_count: usize,
     pub(crate) expanded_preview_truncated: bool,
     pub(crate) masked_preview: String,
+    /// The row title to show while this item is a locked secret, or `None` when
+    /// the title is a user-assigned name. A name is the user's own words rather
+    /// than the secret itself, and masking it would leave every secret row
+    /// looking the same — the exact thing the partial mask exists to avoid.
+    pub(crate) masked_row_title: Option<String>,
 }
 
 impl CachedRowPresentation {
@@ -83,13 +91,14 @@ impl CachedRowPresentation {
             };
             return Self {
                 title,
-                created_label: format_timestamp(&item.created_at),
+                recency_label: format_timestamp(&item.last_used_at),
                 detected_language: None,
                 collapsed_preview: metadata.clone(),
                 expanded_preview: metadata,
                 expanded_preview_line_count: 1,
                 expanded_preview_truncated: false,
                 masked_preview: String::new(),
+                masked_row_title: None,
             };
         }
 
@@ -106,15 +115,23 @@ impl CachedRowPresentation {
             custom_name.to_owned()
         };
 
+        // Derived from the title rather than the raw content so the mask inherits
+        // `single_line_title`'s whitespace collapsing and can never fold a newline
+        // into a list row. Computed here because the literal below moves `title`.
+        let masked_row_title = custom_name
+            .is_empty()
+            .then(|| partially_masked_secret_title(&title));
+
         Self {
             title,
-            created_label: format_timestamp(&item.created_at),
+            recency_label: format_timestamp(&item.last_used_at),
             detected_language,
             collapsed_preview,
             expanded_preview,
             expanded_preview_line_count,
             expanded_preview_truncated,
             masked_preview: masked_secret_preview(&item.content),
+            masked_row_title,
         }
     }
 
@@ -280,4 +297,46 @@ pub(crate) struct LauncherView {
     pub(crate) emoji_search_selected_index: usize,
     pub(crate) emoji_results_scroll: UniformListScrollHandle,
     pub(crate) command_palette_scroll: UniformListScrollHandle,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn secret_record(name: &str) -> ClipboardRecord {
+        ClipboardRecord {
+            id: 1,
+            item_type: ClipboardItemType::Password,
+            content: "ghp_ZkQ1r8Tn4wLm2xVb".to_owned(),
+            name: name.to_owned(),
+            description: String::new(),
+            tags: vec!["secret".to_owned()],
+            parameters: Vec::new(),
+            created_at: "2026-03-29T00:39:00Z".to_owned(),
+            last_used_at: "2026-03-29T00:39:00Z".to_owned(),
+            image: None,
+            pin_order: None,
+        }
+    }
+
+    #[test]
+    fn unnamed_secret_rows_get_a_masked_title() {
+        let row = CachedRowPresentation::from_record(&secret_record(""));
+
+        let masked = row
+            .masked_row_title
+            .expect("an unnamed secret needs a masked row title");
+        assert_eq!(row.title, "ghp_ZkQ1r8Tn4wLm2xVb");
+        assert!(!masked.contains("ZkQ1r8Tn4wLm2xVb"));
+    }
+
+    #[test]
+    fn named_secret_rows_keep_their_name() {
+        // The name is the user's own words, not the secret, and masking it would
+        // make every secret row look identical.
+        let row = CachedRowPresentation::from_record(&secret_record("prod deploy token"));
+
+        assert_eq!(row.title, "prod deploy token");
+        assert!(row.masked_row_title.is_none());
+    }
 }

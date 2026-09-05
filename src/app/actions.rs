@@ -1195,10 +1195,10 @@ impl LauncherView {
         }
     }
 
-    /// Copies the selected emoji and keeps the launcher open (so several can
-    /// be picked in a row). Uses `mark_self_clipboard_write` so this doesn't
-    /// create a clipboard-history entry — it's a picker action, not a
-    /// captured clipboard event.
+    /// Copies the selected emoji and dismisses the launcher, so picking an emoji
+    /// ends the same way copying a clip does rather than leaving the window up.
+    /// Uses `mark_self_clipboard_write` so this doesn't create a clipboard-history
+    /// entry — it's a picker action, not a captured clipboard event.
     pub(crate) fn copy_selected_emoji(&mut self, cx: &mut Context<Self>) {
         let Some(entry_index) = self
             .emoji_search_results
@@ -1215,6 +1215,9 @@ impl LauncherView {
         cx.write_to_clipboard(ClipboardItem::new_string(glyph.to_owned()));
         #[cfg(target_os = "linux")]
         write_clipboard_text(glyph);
+        // `reset_for_show` clears emoji-search state, so the next open starts on
+        // the normal results list rather than back in the grid.
+        self.begin_close_transition(LauncherExitIntent::Hide);
         cx.notify();
     }
 
@@ -4157,6 +4160,7 @@ city = "New York"
                 },
             ],
             created_at: "2026-03-29T00:39:00Z".to_owned(),
+            last_used_at: "2026-03-29T00:39:00Z".to_owned(),
             image: None,
             name: String::new(),
             pin_order: None,
@@ -4197,6 +4201,7 @@ city = "New York"
             tags: vec!["secret".to_owned(), "BOWL:K8S-OPS".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-29T00:39:00Z".to_owned(),
+            last_used_at: "2026-03-29T00:39:00Z".to_owned(),
             image: None,
             name: String::new(),
             pin_order: None,

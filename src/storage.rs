@@ -105,7 +105,12 @@ pub struct ClipboardRecord {
     pub description: String,
     pub tags: Vec<String>,
     pub parameters: Vec<ClipboardParameter>,
+    /// When the clip was first captured. Never rewritten, so the detail pane can
+    /// always answer "where did this come from".
     pub created_at: String,
+    /// When the clip was last copied out of Pasta or re-copied from elsewhere.
+    /// This — not `created_at` — is what orders the history list.
+    pub last_used_at: String,
     pub image: Option<ImageAttachment>,
     pub pin_order: Option<i64>,
 }
@@ -182,6 +187,11 @@ struct ScoredRecord {
 #[derive(Clone)]
 struct IndexedRecord {
     record: ClipboardRecord,
+    /// `record.last_used_at` parsed once at load. RFC 3339 strings are only
+    /// safe to compare lexicographically when their fractional-second parts
+    /// have equal width, and `to_rfc3339` emits 0/3/6/9 digits depending on the
+    /// value, so ordering compares this instead of the string.
+    last_used_micros: i64,
     content_hash: String,
     content_lower: String,
     description_lower: String,
@@ -190,8 +200,33 @@ struct IndexedRecord {
 
 #[derive(Default)]
 struct MemorySearchIndex {
+    /// Item ids, most recently used first — the order the history list renders
+    /// in. Keyed on use rather than insertion, so re-copying an old clip lifts it
+    /// back to the top instead of leaving it where its row id happened to fall.
     order_desc_ids: Vec<i64>,
     by_id: HashMap<i64, IndexedRecord>,
+}
+
+impl MemorySearchIndex {
+    fn sort_by_recency(&mut self) {
+        let by_id = &self.by_id;
+        // Row id breaks ties so two clips written in the same instant keep a
+        // stable, newest-first order rather than swapping between sorts.
+        self.order_desc_ids.sort_unstable_by_key(|id| {
+            let micros = by_id
+                .get(id)
+                .map_or(i64::MIN, |indexed| indexed.last_used_micros);
+            std::cmp::Reverse((micros, *id))
+        });
+    }
+}
+
+/// RFC 3339 timestamp to microseconds since the epoch, for ordering. Unparseable
+/// input sorts oldest rather than panicking or silently landing at "now".
+fn rfc3339_micros(timestamp: &str) -> i64 {
+    DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| value.timestamp_micros())
+        .unwrap_or(i64::MIN)
 }
 
 #[derive(Clone)]
@@ -324,21 +359,22 @@ impl ClipboardStorage {
             )
             .optional()?;
 
+        let now = Utc::now().to_rfc3339();
+
         if let Some((existing_id, existing_item_type)) = existing {
             if force_secret && existing_item_type != "password" {
                 let forced_type = ClipboardItemType::Password;
                 let forced_tags = serde_json::to_string(&tags)?;
-                let created_at = Utc::now().to_rfc3339();
                 let encrypted_content = self.crypto.encrypt(text)?;
                 tx.execute(
                     "UPDATE clipboard_items
-                     SET item_type = ?1, content = ?2, is_encrypted = 1, tags = ?3, created_at = ?4
+                     SET item_type = ?1, content = ?2, is_encrypted = 1, tags = ?3, last_used_at = ?4
                      WHERE id = ?5",
                     params![
                         forced_type.as_str(),
                         encrypted_content,
                         forced_tags,
-                        created_at,
+                        now,
                         existing_id
                     ],
                 )?;
@@ -347,8 +383,16 @@ impl ClipboardStorage {
                 return Ok(true);
             }
 
-            tx.rollback()?;
-            return Ok(false);
+            // Re-copying something already in history is a reorder, not a
+            // duplicate insert: the row stays put and its recency is bumped so
+            // it climbs back to the top of the list.
+            tx.execute(
+                "UPDATE clipboard_items SET last_used_at = ?1 WHERE id = ?2",
+                params![now, existing_id],
+            )?;
+            tx.commit()?;
+            self.sync_index_record_from_db(existing_id)?;
+            return Ok(true);
         }
 
         let (stored_content, is_encrypted) = if item_type == ClipboardItemType::Password {
@@ -358,11 +402,10 @@ impl ClipboardStorage {
         };
 
         let tags_json = serde_json::to_string(&tags)?;
-        let created_at = Utc::now().to_rfc3339();
 
         tx.execute(
-            "INSERT INTO clipboard_items (item_type, content, is_encrypted, tags, parameters, description, content_hash, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO clipboard_items (item_type, content, is_encrypted, tags, parameters, description, content_hash, created_at, last_used_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
             params![
                 item_type.as_str(),
                 stored_content,
@@ -371,7 +414,7 @@ impl ClipboardStorage {
                 "[]",
                 "",
                 content_hash,
-                created_at,
+                now,
             ],
         )?;
         let inserted_id = tx.last_insert_rowid();
@@ -381,8 +424,9 @@ impl ClipboardStorage {
     }
 
     /// Inserts a clipboard image, deduplicating by content hash the same way
-    /// [`Self::upsert_clipboard_item_with_hint`] does for text: a repeat copy
-    /// of bytes already in history is a no-op, not a reorder.
+    /// [`Self::upsert_clipboard_item_with_hint`] does for text: a repeat copy of
+    /// bytes already in history reorders the existing row to the top rather than
+    /// storing the same bytes twice.
     pub fn upsert_clipboard_image_item(&self, bytes: &[u8], mime_type: &str) -> Result<bool> {
         if bytes.is_empty() {
             return Ok(false);
@@ -401,9 +445,18 @@ impl ClipboardStorage {
             )
             .optional()?;
 
-        if existing.is_some() {
-            tx.rollback()?;
-            return Ok(false);
+        let now = Utc::now().to_rfc3339();
+
+        if let Some(existing_id) = existing {
+            // Same as the text path: a repeat copy reorders the existing row
+            // rather than inserting a second copy of the same bytes.
+            tx.execute(
+                "UPDATE clipboard_items SET last_used_at = ?1 WHERE id = ?2",
+                params![now, existing_id],
+            )?;
+            tx.commit()?;
+            self.sync_index_record_from_db(existing_id)?;
+            return Ok(true);
         }
 
         let extension = extension_for_mime_type(mime_type);
@@ -419,18 +472,17 @@ impl ClipboardStorage {
             .and_then(|reader| reader.into_dimensions().ok())
             .unwrap_or((0, 0));
 
-        let created_at = Utc::now().to_rfc3339();
         let image_path_str = image_path.to_string_lossy().into_owned();
 
         tx.execute(
-            "INSERT INTO clipboard_items (item_type, content, is_encrypted, tags, parameters, description, content_hash, created_at, image_path, image_width, image_height, image_byte_size)
-             VALUES (?1, ?2, 0, ?3, '[]', '', ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO clipboard_items (item_type, content, is_encrypted, tags, parameters, description, content_hash, created_at, last_used_at, image_path, image_width, image_height, image_byte_size)
+             VALUES (?1, ?2, 0, ?3, '[]', '', ?4, ?5, ?5, ?6, ?7, ?8, ?9)",
             params![
                 ClipboardItemType::Image.as_str(),
                 mime_type,
                 "[]",
                 content_hash,
-                created_at,
+                now,
                 image_path_str,
                 width,
                 height,
@@ -788,16 +840,17 @@ impl ClipboardStorage {
         Ok(deleted > 0)
     }
 
-    /// Bumps `created_at` to now, so re-copying an existing item resurfaces
-    /// it at the top of the default (recency-ordered) listing next time the
-    /// launcher opens — otherwise a re-copy leaves the item exactly where
-    /// it already was, which reads as if nothing happened.
+    /// Bumps `last_used_at` to now, so re-copying an existing item resurfaces
+    /// it at the top of the default (recency-ordered) listing — otherwise a
+    /// re-copy leaves the item exactly where it already was, which reads as if
+    /// nothing happened. `created_at` is deliberately left alone: the detail
+    /// pane still reports when the clip was first captured.
     pub fn touch_clipboard_item(&self, id: i64) -> Result<()> {
         let conn = self.open()?;
-        let created_at = Utc::now().to_rfc3339();
+        let last_used_at = Utc::now().to_rfc3339();
         conn.execute(
-            "UPDATE clipboard_items SET created_at = ?1 WHERE id = ?2",
-            params![created_at, id],
+            "UPDATE clipboard_items SET last_used_at = ?1 WHERE id = ?2",
+            params![last_used_at, id],
         )?;
         drop(conn);
         self.sync_index_record_from_db(id)
@@ -1286,8 +1339,8 @@ impl ClipboardStorage {
         } else {
             let created_at = Utc::now().to_rfc3339();
             tx.execute(
-                "INSERT INTO clipboard_items (item_type, content, is_encrypted, tags, parameters, description, content_hash, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO clipboard_items (item_type, content, is_encrypted, tags, parameters, description, content_hash, created_at, last_used_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
                 params![
                     item_type.as_str(),
                     stored_content,
@@ -1338,6 +1391,43 @@ impl ClipboardStorage {
         self.ensure_image_columns(&conn)?;
         self.ensure_pin_order_column(&conn)?;
         self.ensure_name_column(&conn)?;
+        self.ensure_last_used_at_column(&conn)?;
+        Ok(())
+    }
+
+    /// Adds the recency column that orders the history list, backfilling it from
+    /// `created_at` so an existing database keeps its current order on first run
+    /// after the upgrade. The backfill is a no-op once every row has a value, so
+    /// it runs on every boot as a cheap repair pass rather than only on the run
+    /// that adds the column.
+    fn ensure_last_used_at_column(&self, conn: &Connection) -> Result<()> {
+        let mut present = false;
+        {
+            let mut stmt = conn.prepare("PRAGMA table_info(clipboard_items)")?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let name: String = row.get(1)?;
+                if name == "last_used_at" {
+                    present = true;
+                    break;
+                }
+            }
+        }
+
+        if !present {
+            conn.execute(
+                "ALTER TABLE clipboard_items ADD COLUMN last_used_at TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+
+        conn.execute(
+            "UPDATE clipboard_items SET last_used_at = created_at WHERE last_used_at = ''",
+            [],
+        )?;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_clipboard_last_used_at ON clipboard_items(last_used_at DESC);",
+        )?;
         Ok(())
     }
 
@@ -1439,9 +1529,10 @@ impl ClipboardStorage {
         let conn = self.open()?;
         let mut stmt = conn.prepare(
             "SELECT id, item_type, content, is_encrypted, tags, parameters, description, created_at, content_hash,
-                    image_path, image_width, image_height, image_byte_size, pin_order, name
+                    image_path, image_width, image_height, image_byte_size, pin_order, name,
+                    last_used_at
              FROM clipboard_items
-             ORDER BY id DESC",
+             ORDER BY last_used_at DESC, id DESC",
         )?;
         let mut rows = stmt.query([])?;
 
@@ -1454,6 +1545,10 @@ impl ClipboardStorage {
             rebuilt.order_desc_ids.push(id);
             rebuilt.by_id.insert(id, indexed);
         }
+        // The query already orders by `last_used_at`, but it compares RFC 3339
+        // strings; re-sort on the parsed key so sub-second ties resolve the same
+        // way they do for every later incremental update.
+        rebuilt.sort_by_recency();
 
         let mut index = self
             .memory_index
@@ -1482,7 +1577,8 @@ impl ClipboardStorage {
         let result: Option<Option<IndexedRecord>> = conn
             .query_row(
                 "SELECT id, item_type, content, is_encrypted, tags, parameters, description, created_at, content_hash,
-                        image_path, image_width, image_height, image_byte_size, pin_order, name
+                        image_path, image_width, image_height, image_byte_size, pin_order, name,
+                        last_used_at
                  FROM clipboard_items
                  WHERE id = ?1",
                 params![id],
@@ -1511,6 +1607,15 @@ impl ClipboardStorage {
         let image_byte_size: Option<i64> = row.get(12)?;
         let pin_order: Option<i64> = row.get(13)?;
         let name: String = row.get(14)?;
+        // Rows written before the column existed are backfilled at migration
+        // time; this fallback just covers anything that slipped through.
+        let last_used_at: String = row.get::<_, String>(15).unwrap_or_default();
+        let last_used_at = if last_used_at.is_empty() {
+            created_at.clone()
+        } else {
+            last_used_at
+        };
+        let last_used_micros = rfc3339_micros(&last_used_at);
         let image = image_path.map(|path| {
             let path = PathBuf::from(path);
             let mime_type = mime_type_for_path(&path);
@@ -1572,9 +1677,11 @@ impl ClipboardStorage {
                 tags,
                 parameters,
                 created_at,
+                last_used_at,
                 image,
                 pin_order,
             },
+            last_used_micros,
             content_hash,
             content_lower,
             description_lower,
@@ -1593,9 +1700,7 @@ impl ClipboardStorage {
             index.order_desc_ids.push(id);
         }
         index.by_id.insert(id, indexed);
-        index
-            .order_desc_ids
-            .sort_unstable_by(|left, right| right.cmp(left));
+        index.sort_by_recency();
     }
 
     fn remove_index_record(&self, id: i64) {
@@ -2074,7 +2179,16 @@ fn classify_clipboard_text_with_mode(
         SecretClassificationMode::Auto | SecretClassificationMode::ForceSecret
     );
 
-    let item_type = if secret_detection_enabled && !looks_base64 && looks_like_password(text) {
+    // A URL satisfies every shape test `looks_like_password` applies — mixed
+    // case from the host and path, digits, and `:`/`/` standing in for symbols —
+    // so without this guard most links land in history masked and auth-gated.
+    // Non-web schemes (`postgres://`, `ssh://`) stay eligible, since those really
+    // do tend to carry credentials, and any URL can still be marked secret by hand.
+    let item_type = if secret_detection_enabled
+        && !looks_base64
+        && !looks_like_url(text)
+        && looks_like_password(text)
+    {
         tags.push("sensitive".to_owned());
         tags.push("secret".to_owned());
         tags.push("pass".to_owned());
@@ -3272,20 +3386,22 @@ fn combined_search_score(item: &ScoredRecord) -> f32 {
         0.0
     };
 
-    // Recency boost: recent items get up to +0.3, decaying with half-life ~30 days.
-    let recency = recency_boost(&item.record.created_at);
+    // Recency boost: recently used items get up to +0.3, decaying with half-life
+    // ~30 days. Keyed on last use rather than capture so a clip you keep reaching
+    // for stays near the top of search results, not just of the browse list.
+    let recency = recency_boost(&item.record.last_used_at);
 
     base + recency
 }
 
 /// Returns a recency boost between 0.0 and 0.3 based on how recently the item
-/// was created. Uses exponential decay with a half-life of approximately 30 days
+/// was used. Uses exponential decay with a half-life of approximately 30 days
 /// (720 hours).
-fn recency_boost(created_at: &str) -> f32 {
+fn recency_boost(last_used_at: &str) -> f32 {
     const DECAY_HALF_LIFE_HOURS: f64 = 720.0;
     const MAX_BOOST: f32 = 0.3;
 
-    let Ok(timestamp) = DateTime::parse_from_rfc3339(created_at) else {
+    let Ok(timestamp) = DateTime::parse_from_rfc3339(last_used_at) else {
         return 0.0;
     };
 
@@ -4158,6 +4274,43 @@ mod tests {
     }
 
     #[test]
+    fn urls_are_not_auto_classified_as_secrets() {
+        // Each of these satisfies every shape test `looks_like_password` applies:
+        // mixed case, digits, and `:`/`/` counting as symbols.
+        for url in [
+            "https://Example.com/Path1?x=1",
+            "https://docs.rs/gpui/0.1.0/Struct.html",
+            "https://www.google.com/search?q=Rust+GPUI&num=20",
+            "http://localhost:3000/api/V1/users?id=42",
+            "https://bucket.s3.amazonaws.com/f.txt?X-Amz-Signature=Ab12cd34",
+        ] {
+            let (item_type, tags) = classify_clipboard_text(url);
+
+            assert_ne!(
+                item_type,
+                ClipboardItemType::Password,
+                "{url} should not auto-classify as a secret"
+            );
+            assert!(
+                tags.iter().any(|tag| tag == "url"),
+                "{url} should still carry the url tag, got {tags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn credential_shaped_text_is_still_auto_classified_as_secret() {
+        let (item_type, tags) = classify_clipboard_text("Xq7!vRt2@mLp9#Zk");
+
+        assert_eq!(
+            item_type,
+            ClipboardItemType::Password,
+            "the url guard should not disarm secret detection generally"
+        );
+        assert!(tags.iter().any(|tag| tag == "secret"));
+    }
+
+    #[test]
     fn base64_content_is_tagged_and_not_auto_secret() {
         let encoded = BASE64.encode("kubectl get pods -A");
         let (item_type, tags) = classify_clipboard_text(&encoded);
@@ -4244,6 +4397,7 @@ mod tests {
             tags: vec!["command".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
+            last_used_at: "2026-03-11T00:00:00Z".to_owned(),
             image: None,
             name: String::new(),
             pin_order: None,
@@ -4265,6 +4419,7 @@ mod tests {
             tags: vec!["text".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
+            last_used_at: "2026-03-11T00:00:00Z".to_owned(),
             image: None,
             name: String::new(),
             pin_order: None,
@@ -4283,6 +4438,7 @@ mod tests {
             tags: vec!["lang:rust".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
+            last_used_at: "2026-03-11T00:00:00Z".to_owned(),
             image: None,
             name: String::new(),
             pin_order: None,
@@ -4303,6 +4459,7 @@ mod tests {
             tags: vec!["text".to_owned()],
             parameters: Vec::new(),
             created_at: "2026-03-11T00:00:00Z".to_owned(),
+            last_used_at: "2026-03-11T00:00:00Z".to_owned(),
             image: None,
             name: String::new(),
             pin_order: None,
@@ -4415,6 +4572,129 @@ mod tests {
         assert_eq!(context.fragment, "");
     }
 
+    /// Pins `last_used_at` to fixed values so ordering assertions can't tie on a
+    /// fast machine, then rebuilds the in-memory index from what's on disk.
+    fn force_last_used(storage: &ClipboardStorage, id: i64, timestamp: &str) {
+        let conn = storage.open().expect("test db should open");
+        conn.execute(
+            "UPDATE clipboard_items SET last_used_at = ?1 WHERE id = ?2",
+            params![timestamp, id],
+        )
+        .expect("forcing last_used_at should succeed");
+        drop(conn);
+        storage
+            .rebuild_memory_index()
+            .expect("index rebuild should succeed");
+    }
+
+    fn listed_contents(storage: &ClipboardStorage, generation: u64) -> Vec<String> {
+        storage
+            .search_items("", 10, false, SearchExecution::Fast, generation, None)
+            .expect("should load items")
+            .into_iter()
+            .map(|item| item.content)
+            .collect()
+    }
+
+    #[test]
+    fn recopying_an_existing_item_lifts_it_to_the_top() {
+        let storage = test_storage("recopy-reorder");
+        storage
+            .upsert_clipboard_item("alpha")
+            .expect("insert alpha");
+        storage.upsert_clipboard_item("beta").expect("insert beta");
+
+        let ids: Vec<(i64, String)> = storage
+            .search_items("", 10, false, SearchExecution::Fast, 1, None)
+            .expect("should load items")
+            .into_iter()
+            .map(|item| (item.id, item.content))
+            .collect();
+        let alpha_id = ids
+            .iter()
+            .find(|(_, content)| content == "alpha")
+            .expect("alpha should exist")
+            .0;
+        let beta_id = ids
+            .iter()
+            .find(|(_, content)| content == "beta")
+            .expect("beta should exist")
+            .0;
+        force_last_used(&storage, alpha_id, "2026-03-11T00:00:00+00:00");
+        force_last_used(&storage, beta_id, "2026-03-11T00:01:00+00:00");
+
+        assert_eq!(listed_contents(&storage, 2), vec!["beta", "alpha"]);
+
+        let changed = storage
+            .upsert_clipboard_item("alpha")
+            .expect("re-copying alpha should succeed");
+
+        assert!(
+            changed,
+            "a re-copy reorders history, so it must report a change to refresh the launcher"
+        );
+        assert_eq!(
+            listed_contents(&storage, 3),
+            vec!["alpha", "beta"],
+            "re-copying an existing clip should lift it back to the top"
+        );
+    }
+
+    #[test]
+    fn touching_an_item_reorders_it_without_rewriting_its_capture_time() {
+        let storage = test_storage("touch-reorder");
+        storage
+            .upsert_clipboard_item("alpha")
+            .expect("insert alpha");
+        storage.upsert_clipboard_item("beta").expect("insert beta");
+
+        let seeded = storage
+            .search_items("", 10, false, SearchExecution::Fast, 1, None)
+            .expect("should load items");
+        let alpha = seeded
+            .iter()
+            .find(|item| item.content == "alpha")
+            .expect("alpha should exist")
+            .clone();
+        let beta_id = seeded
+            .iter()
+            .find(|item| item.content == "beta")
+            .expect("beta should exist")
+            .id;
+        force_last_used(&storage, alpha.id, "2026-03-11T00:00:00+00:00");
+        force_last_used(&storage, beta_id, "2026-03-11T00:01:00+00:00");
+        assert_eq!(listed_contents(&storage, 2), vec!["beta", "alpha"]);
+
+        storage
+            .touch_clipboard_item(alpha.id)
+            .expect("touch should succeed");
+
+        let listed = storage
+            .search_items("", 10, false, SearchExecution::Fast, 3, None)
+            .expect("should load items");
+        assert_eq!(
+            listed
+                .iter()
+                .map(|item| item.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "beta"],
+            "copying an existing clip should lift it back to the top"
+        );
+
+        let touched = listed
+            .iter()
+            .find(|item| item.id == alpha.id)
+            .expect("alpha should still exist");
+        assert_eq!(
+            touched.created_at, alpha.created_at,
+            "the capture time is what the detail pane reports; only recency moves"
+        );
+        assert_ne!(
+            touched.last_used_at, touched.created_at,
+            "the recency column should have advanced past the capture time"
+        );
+    }
+
     #[test]
     fn unmark_item_as_secret_restores_plain_command_content() {
         let storage = test_storage("unmark-secret");
@@ -4524,6 +4804,50 @@ mod tests {
             .find(|item| item.id == id)
             .expect("item should still exist");
         assert!(cleared.name.is_empty());
+
+        let _ = fs::remove_file(&storage.db_path);
+    }
+
+    #[test]
+    fn last_used_at_migration_backfills_from_created_at() {
+        // The upgrade path every existing install takes: rows that predate the
+        // column must keep their order instead of collapsing to a single value.
+        let storage = test_storage("last-used-migration");
+        storage
+            .upsert_clipboard_item("older")
+            .expect("insert older");
+        storage
+            .upsert_clipboard_item("newer")
+            .expect("insert newer");
+
+        let conn = storage.open().expect("should open connection");
+        conn.execute("UPDATE clipboard_items SET last_used_at = ''", [])
+            .expect("simulating a pre-migration database should succeed");
+        storage
+            .ensure_last_used_at_column(&conn)
+            .expect("re-running the migration should be a no-op for the column");
+        drop(conn);
+        storage
+            .rebuild_memory_index()
+            .expect("index rebuild should succeed");
+
+        let listed = storage
+            .search_items("", 10, false, SearchExecution::Fast, 1, None)
+            .expect("should load items");
+        for item in &listed {
+            assert_eq!(
+                item.last_used_at, item.created_at,
+                "a backfilled row should inherit its capture time"
+            );
+        }
+        assert_eq!(
+            listed
+                .iter()
+                .map(|item| item.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["newer", "older"],
+            "backfilled rows should keep their existing newest-first order"
+        );
 
         let _ = fs::remove_file(&storage.db_path);
     }

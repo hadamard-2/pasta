@@ -6,6 +6,26 @@ pub(crate) fn masked_secret_preview(content: &str) -> String {
     "•".repeat(width)
 }
 
+/// The list-row form of a masked secret: a short leading hint followed by a
+/// fixed run of dots. The preview pane can afford to hide a secret completely,
+/// but a results list can't — a column of identical dot runs gives the user no
+/// way to tell one secret from another, so the row trades a few leading
+/// characters for that. The dot run is fixed width on purpose, so the row
+/// doesn't also leak how long the value is.
+pub(crate) fn partially_masked_secret_title(content: &str) -> String {
+    const HINT_CHARS: usize = 4;
+    const MASK_CHARS: usize = 8;
+
+    let mask = "•".repeat(MASK_CHARS);
+    // Below twice the hint length there isn't enough left to hide, so hide it all.
+    if content.chars().count() <= HINT_CHARS * 2 {
+        return mask;
+    }
+
+    let hint: String = content.chars().take(HINT_CHARS).collect();
+    format!("{hint}{mask}")
+}
+
 pub(crate) fn preview_content(content: &str) -> String {
     let wrapped = expanded_preview_content(content);
     let mut lines = wrapped.lines();
@@ -104,4 +124,35 @@ pub(crate) fn format_image_metadata(image: &ImageAttachment) -> String {
         image.height,
         format_byte_size(image.byte_size)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_mask_keeps_secrets_distinguishable_without_showing_them() {
+        let first = partially_masked_secret_title("ghp_ZkQ1r8Tn4wLm2xVb");
+        let second = partially_masked_secret_title("sk-live_9dPq3RtY7hNs");
+
+        assert_ne!(
+            first, second,
+            "two secrets must not render as the same row label"
+        );
+        assert!(first.starts_with("ghp_"));
+        assert!(!first.contains("ZkQ1r8Tn4wLm2xVb"));
+        assert_eq!(
+            first.chars().count(),
+            second.chars().count(),
+            "a fixed-width mask keeps the row from leaking the secret's length"
+        );
+    }
+
+    #[test]
+    fn partial_mask_hides_short_secrets_entirely() {
+        // Below twice the hint width, a hint would give away most of the value.
+        let masked = partially_masked_secret_title("hunter2!");
+
+        assert!(masked.chars().all(|ch| ch == '\u{2022}'));
+    }
 }

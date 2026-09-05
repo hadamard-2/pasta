@@ -54,12 +54,18 @@ Current baseline:
 - Press `Enter` on a normal item and confirm it copies.
 - Click a row and confirm current click behavior still matches expectations.
 - Delete an item with `Delete` or `Ctrl+Backspace`.
+- Copy an item from partway down the list with `Enter` or a double click, reopen the launcher, and confirm it now sits at the top with a refreshed relative time.
+- Re-copy something already in history from another app, and confirm the existing row moves to the top of an already-open launcher rather than being added a second time or staying put.
+- Confirm the preview pane still reports the item's original capture time after it has been hoisted.
 
 ### Secret Flow
 
-- Select a secret item and reveal it with `Enter` or `Ctrl+R`.
+- Confirm a locked secret's list row shows a few leading characters followed by dots, not the full value, and that two different secrets remain tellable apart.
+- Confirm a secret you have given a name with `F2` keeps showing that name in the list.
+- Select a secret item and reveal it with `Enter` or `Ctrl+R`, and confirm the list row unmasks alongside the preview pane and re-masks when the reveal window lapses.
 - Confirm the current Linux auth behavior matches expectations for this build.
 - Copy a revealed secret and confirm auto-clear still behaves as expected.
+- Copy a URL and confirm it lands in history as a normal item — unmasked, and with no auth prompt to view it.
 
 ### Editors
 
@@ -70,6 +76,14 @@ Current baseline:
 - Confirm the preview pane shows the item's bowl (tags and the info note are deliberately not shown there).
 - Open parameter editor with `Ctrl+P`.
 - Open parameter fill flow by copying a parameterized item.
+
+### Emoji Picker
+
+- Type `e` to surface the emoji affordance and enter the picker.
+- Pick an emoji with `Enter` and confirm the launcher closes and the glyph is on the clipboard.
+- Pick an emoji by clicking a tile and confirm the launcher closes the same way.
+- Reopen the launcher and confirm it comes back to the normal results list, not the emoji grid.
+- Confirm the picked emoji did **not** create a clipboard history entry.
 
 ### Transforms
 

@@ -2321,21 +2321,26 @@ impl LauncherView {
     /// The row's title slot: a static, ellipsized label, or — when this row is
     /// the one being named — an inline editable field wired to the NameEditor
     /// text input, so naming happens in place rather than in a separate panel.
+    /// `masked_title`, when set, stands in for the content-derived title of a
+    /// still-locked secret so the list doesn't show in plain text what the
+    /// preview pane is busy hiding.
     fn render_row_title(
         &self,
         is_naming: bool,
+        masked_title: Option<&str>,
         row_data: &CachedRowPresentation,
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !is_naming {
+            let label = masked_title.unwrap_or(row_data.title.as_str()).to_owned();
             return div()
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
                 .text_size(px(14.0))
                 .text_color(palette.row_text)
-                .child(row_data.title.clone())
+                .child(label)
                 .into_any_element();
         }
 
@@ -2463,6 +2468,14 @@ impl LauncherView {
         // field when this row is being named. Image rows swap the text title
         // for a small thumbnail plus dimensions/size label.
         let is_naming = self.name_editor_target_id == Some(item.id);
+        // Same gate the preview pane uses, so revealing a secret unmasks both
+        // panes at once and the reveal timer expiring re-hides both.
+        let masked_title =
+            if item.item_type == ClipboardItemType::Password && self.is_secret_masked(item.id) {
+                row_data.masked_row_title.as_deref()
+            } else {
+                None
+            };
         if let Some(image) = &item.image {
             fill = fill.child(
                 div()
@@ -2494,10 +2507,11 @@ impl LauncherView {
                                     .object_fit(ObjectFit::Cover),
                             ),
                     )
-                    .child(self.render_row_title(is_naming, row_data, palette, cx)),
+                    .child(self.render_row_title(is_naming, masked_title, row_data, palette, cx)),
             );
         } else {
-            fill = fill.child(self.render_row_title(is_naming, row_data, palette, cx));
+            fill =
+                fill.child(self.render_row_title(is_naming, masked_title, row_data, palette, cx));
         }
 
         if let Some(pill) = secret_pill {
@@ -2523,7 +2537,7 @@ impl LauncherView {
                 .flex_none()
                 .text_size(px(11.0))
                 .text_color(palette.row_meta_text)
-                .child(row_data.created_label.clone()),
+                .child(row_data.recency_label.clone()),
         );
 
         div()

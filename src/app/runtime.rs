@@ -612,10 +612,11 @@ fn run_evdev_hotkey_listener(menu_tx: &mpsc::Sender<MenuCommand>) {
     }
 }
 
-/// Refreshes the launcher's result list after a clipboard watcher insert, if
-/// the window is currently alive. Shared by the text and image insert paths
-/// on both platform watchers.
-fn refresh_launcher_after_clipboard_insert(cx: &mut App) {
+/// Refreshes the launcher's result list after the clipboard watcher changes
+/// history, if the window is currently alive. That covers a new clip and a
+/// re-copy of one already stored, since a re-copy reorders the list. Shared by
+/// the text and image paths on both platform watchers.
+fn refresh_launcher_after_clipboard_history_change(cx: &mut App) {
     if let Some(window) = cx
         .try_global::<LauncherState>()
         .and_then(|state| state.window)
@@ -668,7 +669,7 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                     let storage_for_insert = storage.clone();
                     let mime_type = image.format.mime_type().to_owned();
                     let bytes = image.bytes.clone();
-                    let inserted = cx
+                    let history_changed = cx
                         .background_executor()
                         .spawn(async move {
                             storage_for_insert
@@ -676,8 +677,8 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                                 .unwrap_or(false)
                         })
                         .await;
-                    if inserted {
-                        let _ = cx.update(refresh_launcher_after_clipboard_insert);
+                    if history_changed {
+                        let _ = cx.update(refresh_launcher_after_clipboard_history_change);
                     }
                 } else if let Some(snapshot) = read_clipboard_snapshot()
                     && !snapshot.is_transient
@@ -697,7 +698,7 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                     let storage_for_insert = storage.clone();
                     let text = snapshot.text;
                     let is_concealed = snapshot.is_concealed;
-                    let inserted = cx
+                    let history_changed = cx
                         .background_executor()
                         .spawn(async move {
                             if is_concealed {
@@ -711,8 +712,8 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                             }
                         })
                         .await;
-                    if inserted {
-                        let _ = cx.update(refresh_launcher_after_clipboard_insert);
+                    if history_changed {
+                        let _ = cx.update(refresh_launcher_after_clipboard_history_change);
                     }
                 }
             }
@@ -780,7 +781,7 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                     }
 
                     let storage_for_insert = storage.clone();
-                    let inserted = cx
+                    let history_changed = cx
                         .background_executor()
                         .spawn(async move {
                             storage_for_insert
@@ -788,8 +789,8 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                                 .unwrap_or(false)
                         })
                         .await;
-                    if inserted {
-                        let _ = cx.update(refresh_launcher_after_clipboard_insert);
+                    if history_changed {
+                        let _ = cx.update(refresh_launcher_after_clipboard_history_change);
                     }
                 } else if let Some(snapshot) = cx
                     .background_executor()
@@ -812,7 +813,7 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                     let storage_for_insert = storage.clone();
                     let text = snapshot.text;
                     let is_concealed = snapshot.is_concealed;
-                    let inserted = cx
+                    let history_changed = cx
                         .background_executor()
                         .spawn(async move {
                             if is_concealed {
@@ -827,8 +828,8 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                         })
                         .await;
 
-                    if inserted {
-                        let _ = cx.update(refresh_launcher_after_clipboard_insert);
+                    if history_changed {
+                        let _ = cx.update(refresh_launcher_after_clipboard_history_change);
                     }
                 }
             }
