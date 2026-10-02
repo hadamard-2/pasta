@@ -72,7 +72,18 @@ export class ShellBridge {
             Gio.DBus.session, BRIDGE_NAME, Gio.BusNameOwnerFlags.NONE, null, null);
     }
 
-    async SetClipboardAsync([mimetype, handle], invocation, fdList) {
+    async SetClipboardAsync(params, invocation, fdList) {
+        // Every path inside answers the invocation; this catch makes sure an
+        // unexpected throw still does, so the caller is never left waiting.
+        try {
+            await this._setClipboard(params, invocation, fdList);
+        } catch (e) {
+            console.warn(`pasta-clipboard: SetClipboard failed: ${e.message}`);
+            invocation.return_dbus_error('org.freedesktop.DBus.Error.Failed', e.message);
+        }
+    }
+
+    async _setClipboard([mimetype, handle], invocation, fdList) {
         // Take ownership of every incoming fd first so none outlives this call.
         const fds = fdList ? fdList.steal_fds() : [];
         const closeAllExcept = keep => fds.forEach((fd, index) => {

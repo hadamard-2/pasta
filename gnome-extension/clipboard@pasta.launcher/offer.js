@@ -15,22 +15,42 @@ const PASTA_EXE = 'pasta-launcher';
 
 function transferInto(selection, mimetype, fd) {
     return new Promise(resolve => {
-        const stream = GioUnix.OutputStream.new(fd, true);
-        selection.transfer_async(Meta.SelectionType.SELECTION_CLIPBOARD, mimetype, -1, stream, null,
-            (source, result) => {
-                try {
-                    source.transfer_finish(result);
-                } catch (e) {
-                    console.warn(`pasta-clipboard: transfer of ${mimetype} failed: ${e.message}`);
-                }
-                try {
-                    // Closing is what tells the reader the payload is complete.
-                    stream.close(null);
-                } catch (e) {
-                    console.warn(`pasta-clipboard: closing ${mimetype} stream failed: ${e.message}`);
-                }
-                resolve();
-            });
+        let stream;
+        try {
+            stream = GioUnix.OutputStream.new(fd, true);
+        } catch (e) {
+            console.warn(`pasta-clipboard: opening ${mimetype} stream failed: ${e.message}`);
+            closeQuietly(fd);
+            resolve();
+            return;
+        }
+        const onTransferred = (source, result) => {
+            try {
+                source.transfer_finish(result);
+            } catch (e) {
+                console.warn(`pasta-clipboard: transfer of ${mimetype} failed: ${e.message}`);
+            }
+            try {
+                // Closing is what tells the reader the payload is complete.
+                stream.close(null);
+            } catch (e) {
+                console.warn(`pasta-clipboard: closing ${mimetype} stream failed: ${e.message}`);
+            }
+            resolve();
+        };
+        try {
+            selection.transfer_async(Meta.SelectionType.SELECTION_CLIPBOARD, mimetype, -1, stream,
+                null, onTransferred);
+        } catch (e) {
+            console.warn(`pasta-clipboard: starting transfer of ${mimetype} failed: ${e.message}`);
+            try {
+                // The stream owns the fd, so closing it closes the write end.
+                stream.close(null);
+            } catch (closeError) {
+                console.warn(`pasta-clipboard: closing ${mimetype} stream failed: ${closeError.message}`);
+            }
+            resolve();
+        }
     });
 }
 
