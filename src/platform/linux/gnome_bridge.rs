@@ -157,40 +157,64 @@ impl SnapshotStore {
 
 pub(crate) static STORE: SnapshotStore = SnapshotStore::new();
 
+/// Reason shown when Pasta's own clipboard service code panicked.
+const SERVICE_PANIC_REASON: &str = "Pasta's clipboard service hit an internal error, so this copy was not captured. Restart Pasta if copies stop appearing.";
+
+/// Runs one piece of the clipboard service's own work. A panic would otherwise
+/// vanish silently (zbus keeps a panicking handler task to itself, and a
+/// panicking reader thread just ends), so it is caught here and handed to
+/// `report` as an unavailable-capture reason instead.
+fn guard_service_panic<T>(report: impl FnOnce(String), work: impl FnOnce() -> T) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            eprintln!("warning: GNOME clipboard service panicked");
+            report(SERVICE_PANIC_REASON.to_owned());
+            None
+        }
+    }
+}
+
 /// Reads every wanted payload of one offer on its own thread, then publishes
 /// the snapshot once all of them have finished or been given up on.
 fn collect_offer(mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
     let spawned = std::thread::Builder::new()
         .name("pasta-gnome-offer".to_owned())
         .spawn(move || {
-            let mut payloads = HashMap::new();
-            for (mime, fd) in readers {
-                match read_payload(fd, MAX_PAYLOAD_BYTES, PAYLOAD_DEADLINE) {
-                    Ok(bytes) => {
-                        payloads.insert(mime, bytes);
-                    }
-                    Err(err) => {
-                        eprintln!("warning: GNOME clipboard payload {mime} dropped: {err:?}");
-                    }
-                }
-            }
-            let mut summary: Vec<String> = payloads
-                .iter()
-                .map(|(mime, bytes)| format!("{mime}={}", bytes.len()))
-                .collect();
-            summary.sort();
-            eprintln!(
-                "info: GNOME clipboard snapshot published: mimetypes={mimetypes:?} payloads=[{}]",
-                summary.join(", ")
-            );
-            STORE.publish(GnomeClipboardSnapshot {
-                mimetypes,
-                payloads,
+            guard_service_panic(super::set_clipboard_capture_blocked, || {
+                read_and_publish(mimetypes, readers)
             });
         });
     if let Err(err) = spawned {
         eprintln!("warning: could not start GNOME clipboard reader thread: {err}");
     }
+}
+
+fn read_and_publish(mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
+    let mut payloads = HashMap::new();
+    for (mime, fd) in readers {
+        match read_payload(fd, MAX_PAYLOAD_BYTES, PAYLOAD_DEADLINE) {
+            Ok(bytes) => {
+                payloads.insert(mime, bytes);
+            }
+            Err(err) => {
+                eprintln!("warning: GNOME clipboard payload {mime} dropped: {err:?}");
+            }
+        }
+    }
+    let mut summary: Vec<String> = payloads
+        .iter()
+        .map(|(mime, bytes)| format!("{mime}={}", bytes.len()))
+        .collect();
+    summary.sort();
+    eprintln!(
+        "info: GNOME clipboard snapshot published: mimetypes={mimetypes:?} payloads=[{}]",
+        summary.join(", ")
+    );
+    STORE.publish(GnomeClipboardSnapshot {
+        mimetypes,
+        payloads,
+    });
 }
 
 async fn executable_of(
@@ -232,42 +256,47 @@ impl ClipboardService {
             )));
         }
 
-        let mut writers = HashMap::new();
-        let mut readers = Vec::new();
-        for mime in select_wanted_mimes(&mimetypes) {
-            let (reader, writer) =
-                std::io::pipe().map_err(|err| zbus::fdo::Error::Failed(format!("pipe: {err}")))?;
-            readers.push((mime.clone(), OwnedFd::from(reader)));
-            writers.insert(mime, OwnedFd::from(writer).into());
-        }
-        collect_offer(mimetypes, readers);
-        Ok(writers)
+        guard_service_panic(super::set_clipboard_capture_blocked, || {
+            answer_offer(mimetypes)
+        })
+        .unwrap_or_else(|| {
+            Err(zbus::fdo::Error::Failed(
+                "internal error handling Offer".to_owned(),
+            ))
+        })
     }
+}
+
+/// Opens one pipe per wanted format, starts reading them, and returns the
+/// write ends for the shell.
+fn answer_offer(
+    mimetypes: Vec<String>,
+) -> zbus::fdo::Result<HashMap<String, zbus::zvariant::OwnedFd>> {
+    let mut writers = HashMap::new();
+    let mut readers = Vec::new();
+    for mime in select_wanted_mimes(&mimetypes) {
+        let (reader, writer) =
+            std::io::pipe().map_err(|err| zbus::fdo::Error::Failed(format!("pipe: {err}")))?;
+        readers.push((mime.clone(), OwnedFd::from(reader)));
+        writers.insert(mime, OwnedFd::from(writer).into());
+    }
+    collect_offer(mimetypes, readers);
+    Ok(writers)
 }
 
 /// Registers Pasta's clipboard service on the session bus, once. The
 /// connection lives in a static so the service stays up for the process
-/// lifetime. Pasta drives the connection's executor on its own thread so that
-/// thread ending (a panic in a handler) is reported as capture being
-/// unavailable instead of going unnoticed.
+/// lifetime; zbus runs it on its own executor thread.
 pub(crate) fn ensure_service() -> Result<(), String> {
-    static SERVICE: std::sync::OnceLock<Result<zbus::Connection, String>> =
+    static SERVICE: std::sync::OnceLock<Result<zbus::blocking::Connection, String>> =
         std::sync::OnceLock::new();
     SERVICE
         .get_or_init(|| {
-            let built = zbus::block_on(async {
-                zbus::connection::Builder::session()?
-                    .internal_executor(false)
-                    .name(PASTA_NAME)?
-                    .serve_at(CLIPBOARD_PATH, ClipboardService)?
-                    .build()
-                    .await
-            })
-            .map_err(|err| err.to_string())
-            .and_then(|conn| {
-                spawn_service_thread(conn.clone())?;
-                Ok(conn)
-            });
+            let built = zbus::blocking::connection::Builder::session()
+                .and_then(|builder| builder.name(PASTA_NAME))
+                .and_then(|builder| builder.serve_at(CLIPBOARD_PATH, ClipboardService))
+                .and_then(|builder| builder.build())
+                .map_err(|err| err.to_string());
             if let Err(err) = &built {
                 eprintln!("warning: could not register {PASTA_NAME} on the session bus: {err}");
             }
@@ -278,33 +307,27 @@ pub(crate) fn ensure_service() -> Result<(), String> {
         .map_err(Clone::clone)
 }
 
-fn spawn_service_thread(conn: zbus::Connection) -> Result<(), String> {
-    std::thread::Builder::new()
-        .name("pasta-gnome-bridge".to_owned())
-        .spawn(move || {
-            let executor = conn.executor().clone();
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                zbus::block_on(async {
-                    loop {
-                        executor.tick().await;
-                    }
-                })
-            }));
-            if outcome.is_err() {
-                eprintln!("warning: Pasta's GNOME clipboard service thread stopped");
-                super::set_clipboard_capture_blocked(
-                    "Pasta's clipboard service stopped, so copies are no longer captured. Restart Pasta.".to_owned(),
-                );
-            }
-        })
-        .map(|_| ())
-        .map_err(|err| format!("could not start the clipboard service thread: {err}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn a_panic_in_service_work_is_reported_as_a_reason() {
+        let mut reported = None;
+        let result: Option<()> =
+            guard_service_panic(|reason| reported = Some(reason), || panic!("boom"));
+        assert!(result.is_none());
+        assert_eq!(reported.as_deref(), Some(SERVICE_PANIC_REASON));
+    }
+
+    #[test]
+    fn service_work_that_finishes_reports_nothing() {
+        let mut reported = None;
+        let result = guard_service_panic(|reason| reported = Some(reason), || 7);
+        assert_eq!(result, Some(7));
+        assert!(reported.is_none());
+    }
 
     fn strings(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_owned()).collect()
