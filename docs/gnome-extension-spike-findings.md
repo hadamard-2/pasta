@@ -48,9 +48,9 @@ Each text and 3 MB set produced two `owner-changed` events and so two `RECEIVED`
 
 Both directions show executable-based gating, but with different scopes and enforcement levels.
 
-**Pasta → extension**: Pasta holds `com.pasta.Launcher` and accepts `SetClipboard` calls only from a caller whose executable path is exactly `/usr/bin/gnome-shell` (verified via `/proc/<pid>/exe`). Reject-caller scenario (`scenario-reject-caller.sh`, Task 2): when busctl attempts the call, D-Bus returns generic "Access denied" and Pasta logs `rejected Offer from /usr/bin/busctl`. The gate is tight.
+**Pasta → extension**: Pasta holds `com.pasta.Launcher` and serves `Offer` calls only from a caller whose executable path is exactly `/usr/bin/gnome-shell` (verified via `/proc/<pid>/exe`). Reject-caller scenario (`scenario-reject-caller.sh`, Task 2): when busctl attempts the call, D-Bus returns `org.freedesktop.DBus.Error.AccessDenied` and Pasta logs `rejected Offer from /usr/bin/busctl`. The gate is tight.
 
-**Extension → Pasta**: The extension calls `Offer` on whoever holds `com.pasta.Launcher`, and will refuse to send content if the name owner's executable basename is not `pasta-launcher`. Impostor scenario (`scenario-impostor-pasta.sh`, Task 4): when a Python process claims the name, the extension logs `PASTA-SPIKE refusing to offer: com.pasta.Launcher is owned by /usr/bin/python3` and sends nothing. The check is a basename match only, so any process the user runs and names `pasta-launcher` will pass it (e.g., a script renamed, a wrapper, or a hijacked symlink).
+**Extension → Pasta**: The extension calls `Offer` on whoever holds `com.pasta.Launcher`, and will refuse to send content if the name owner's executable basename is not `pasta-launcher`. Impostor scenario (`scenario-impostor-pasta.sh`, Task 4): when a Python process claims the name, the extension logs `PASTA-SPIKE refusing to offer: com.pasta.Launcher is owned by /usr/bin/python3` and sends nothing. The check is basename-only (not full path or file ownership), so any native executable named `pasta-launcher` running as the user passes it—including a copied binary, a hard link, or any program compiled under that name.
 
 ### Write-back
 
