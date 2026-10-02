@@ -1,5 +1,6 @@
 import Meta from 'gi://Meta';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {offerToPasta} from './offer.js';
 
 function log(message) {
     console.log(`PASTA-SPIKE ${message}`);
@@ -15,6 +16,9 @@ export default class PastaClipboardSpike extends Extension {
             // String(source) names the concrete source type; recorded so the
             // findings can say which events are replays by the clipboard manager.
             log(`owner-changed source=${String(source)} mimetypes=${JSON.stringify(mimetypes)}`);
+            if (mimetypes.length === 0)
+                return;
+            offerToPasta(selection, mimetypes, log).catch(e => log(`offer failed: ${e.message}`));
         });
         log('enabled');
     }

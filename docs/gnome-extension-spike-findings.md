@@ -32,6 +32,18 @@ The first event is the real copy, with a Wayland source and both text mimetypes.
 
 ### Large payloads (question 1)
 
+Measured by `scenario-offer.sh` in the nested shell; the extension offers on each `owner-changed` with a non-empty mimetype list, Pasta reads each pipe to EOF. All payloads arrived with the expected byte count and SHA-256 prefix, no truncation, no `steal_fds` problems.
+
+| Payload | Bytes | Pasta `Offer` to `RECEIVED` | Extension `offered` | `RECEIVED` lines |
+|---|---|---|---|---|
+| text/plain;charset=utf-8 | 10 | 1 ms | 1.83 ms | 2 |
+| image/png (about 3 MB) | 3173432 | 21 ms | 22.4 ms | 2 |
+| image/png (about 15 MB, incompressible) | 15556313 | 50 ms | 50.7 ms | 1 |
+
+The Xwayland baseline measured earlier via `xclip` was 3.2 MB in about 40 ms and 15.6 MB in about 145 ms, so the pipe path is faster (about 2x to 3x) and the shell side adds under 2 ms of overhead on top of Pasta's own read time.
+
+Each text and 3 MB set produced two `owner-changed` events and so two `RECEIVED` lines: first a `MetaSelectionSourceWayland` source (the real owner), then a `Meta.SelectionSourceMemory` source with the same mimetypes, followed by a `source=null` event with an empty mimetype list in between. The memory-source event is a replay by the clipboard manager re-owning the selection (inferred, not traced to its origin), so the real implementation needs deduplication by content hash or by source type. The 15 MB set showed only the Wayland-source event before the scenario ended (the replay may simply not have arrived yet, inferred).
+
 ### Peer verification (question 2)
 
 ### Write-back

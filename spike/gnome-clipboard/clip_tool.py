@@ -27,8 +27,34 @@ def set_text(text):
     hold_clipboard(lambda clipboard: clipboard.set(text))
 
 
+def make_png(path, width, height, noise_every_n_rows):
+    """Write a PNG whose size is controlled by how many rows are random noise."""
+    import os
+
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf
+
+    width, height, every = int(width), int(height), int(noise_every_n_rows)
+    rowstride = width * 3
+    pixels = bytearray(rowstride * height)
+    for y in range(height):
+        row = os.urandom(rowstride) if y % every == 0 else bytes([y % 256, 90, 200]) * width
+        pixels[y * rowstride:(y + 1) * rowstride] = row
+    pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(bytes(pixels)), GdkPixbuf.Colorspace.RGB, False, 8, width, height, rowstride)
+    pixbuf.savev(path, "png", [], [])
+
+
+def set_file(mimetype, path):
+    data = open(path, "rb").read()
+    hold_clipboard(lambda clipboard: clipboard.set_content(
+        Gdk.ContentProvider.new_for_bytes(mimetype, GLib.Bytes.new(data))))
+
+
 COMMANDS = {
     "set-text": set_text,
+    "make-png": make_png,
+    "set-file": set_file,
 }
 
 if __name__ == "__main__":
