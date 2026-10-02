@@ -1,0 +1,7 @@
+{
+  "uuid": "clipboard@pasta.launcher",
+  "name": "Pasta clipboard",
+  "description": "Lets the Pasta clipboard manager see and set the clipboard on GNOME.",
+  "shell-version": ["50"],
+  "version": 1
+}
