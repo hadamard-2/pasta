@@ -100,17 +100,27 @@ static X11_CLIPBOARD_MONITOR_START: OnceLock<()> = OnceLock::new();
 static X11_CLIPBOARD_MONITOR_READY: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn clipboard_change_count() -> i64 {
-    if is_wayland_session() {
-        ensure_wayland_clipboard_monitor();
-        return WAYLAND_CLIPBOARD_CHANGE_COUNT.load(Ordering::Acquire);
+    match clipboard_path() {
+        ClipboardPath::GnomeExtension => {
+            if let Err(err) = gnome_bridge::ensure_service() {
+                set_clipboard_capture_blocked(format!(
+                    "Pasta could not register its clipboard service on D-Bus: {err}"
+                ));
+            }
+            gnome_bridge::STORE.change_count()
+        }
+        ClipboardPath::Wayland => {
+            ensure_wayland_clipboard_monitor();
+            WAYLAND_CLIPBOARD_CHANGE_COUNT.load(Ordering::Acquire)
+        }
+        ClipboardPath::X11 => {
+            ensure_x11_clipboard_monitor();
+            if X11_CLIPBOARD_MONITOR_READY.load(Ordering::Acquire) {
+                return X11_CLIPBOARD_CHANGE_COUNT.load(Ordering::Acquire);
+            }
+            polling_clipboard_change_count()
+        }
     }
-
-    ensure_x11_clipboard_monitor();
-    if X11_CLIPBOARD_MONITOR_READY.load(Ordering::Acquire) {
-        return X11_CLIPBOARD_CHANGE_COUNT.load(Ordering::Acquire);
-    }
-
-    polling_clipboard_change_count()
 }
 
 fn polling_clipboard_change_count() -> i64 {
@@ -592,6 +602,10 @@ pub(crate) fn show_macos_notification(title: &str, body: &str) {
 }
 
 pub(crate) fn write_clipboard_text(value: &str) {
+    if clipboard_path() == ClipboardPath::GnomeExtension {
+        write_through_gnome_bridge("text/plain;charset=utf-8", value.as_bytes().to_vec());
+        return;
+    }
     if is_wayland_session() {
         let options = CopyOptions::new();
         if let Err(err) = options.copy(
@@ -627,6 +641,10 @@ pub(crate) fn write_clipboard_text(value: &str) {
 /// image copies are silently dropped there too — `xclip` (which forks and
 /// keeps serving the selection in the background) fills that gap.
 pub(crate) fn write_clipboard_image_bytes(bytes: &[u8], mime_type: &str) {
+    if clipboard_path() == ClipboardPath::GnomeExtension {
+        write_through_gnome_bridge(mime_type, bytes.to_vec());
+        return;
+    }
     if is_wayland_session() {
         let options = CopyOptions::new();
         if let Err(err) = options.copy(
@@ -653,6 +671,11 @@ pub(crate) fn write_clipboard_image_bytes(bytes: &[u8], mime_type: &str) {
 }
 
 pub(crate) fn read_clipboard_text() -> Option<String> {
+    if clipboard_path() == ClipboardPath::GnomeExtension {
+        return gnome_bridge::STORE
+            .snapshot()
+            .and_then(|snapshot| snapshot.text());
+    }
     if is_wayland_session() {
         let (mut pipe, _) = get_contents(
             ClipboardType::Regular,
@@ -674,6 +697,33 @@ pub(crate) fn read_clipboard_text() -> Option<String> {
     }
 
     None
+}
+
+/// Image payload of the current clipboard, on paths where Pasta holds the
+/// bytes itself. Other paths read images through GPUI and return `None` here.
+pub(crate) fn read_clipboard_image() -> Option<(Vec<u8>, String)> {
+    if clipboard_path() != ClipboardPath::GnomeExtension {
+        return None;
+    }
+    gnome_bridge::STORE
+        .snapshot()
+        .and_then(|snapshot| snapshot.image())
+}
+
+/// The bridge call waits for the shell to read the whole payload, so it runs
+/// off the UI thread.
+fn write_through_gnome_bridge(mimetype: &str, bytes: Vec<u8>) {
+    let mimetype = mimetype.to_owned();
+    let spawned = std::thread::Builder::new()
+        .name("pasta-gnome-write".to_owned())
+        .spawn(move || {
+            if let Err(err) = gnome_bridge_client::set_clipboard(&mimetype, bytes) {
+                eprintln!("warning: GNOME clipboard write of {mimetype} failed: {err}");
+            }
+        });
+    if let Err(err) = spawned {
+        eprintln!("warning: could not start GNOME clipboard writer thread: {err}");
+    }
 }
 
 /// Upper bound on a file-manager-copied image Pasta will pull into history.
@@ -1732,6 +1782,72 @@ fn is_wayland_session() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
+/// Which mechanism Pasta uses to see and set the clipboard, decided once at
+/// start-up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClipboardPath {
+    /// Wayland data-control protocol (or its missing-protocol report).
+    Wayland,
+    /// GNOME Shell extension over D-Bus; GNOME implements no data-control.
+    GnomeExtension,
+    /// X11 selections via XFIXES and xclip/xsel.
+    X11,
+}
+
+fn choose_clipboard_path(
+    wayland: bool,
+    data_control: bool,
+    current_desktop: Option<&str>,
+) -> ClipboardPath {
+    if !wayland {
+        return ClipboardPath::X11;
+    }
+    let gnome = current_desktop.is_some_and(|desktop| {
+        desktop
+            .split(':')
+            .any(|part| part.eq_ignore_ascii_case("GNOME"))
+    });
+    if !data_control && gnome {
+        ClipboardPath::GnomeExtension
+    } else {
+        ClipboardPath::Wayland
+    }
+}
+
+fn clipboard_path() -> ClipboardPath {
+    static PATH: OnceLock<ClipboardPath> = OnceLock::new();
+    *PATH.get_or_init(|| {
+        let wayland = is_wayland_session();
+        choose_clipboard_path(
+            wayland,
+            wayland && wayland_data_control_available(),
+            std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+        )
+    })
+}
+
+/// Whether Pasta reads and writes the clipboard through the GNOME Shell
+/// extension rather than a protocol of its own.
+pub(crate) fn uses_gnome_clipboard_extension() -> bool {
+    clipboard_path() == ClipboardPath::GnomeExtension
+}
+
+/// Whether the compositor advertises ext- or wlr-data-control.
+fn wayland_data_control_available() -> bool {
+    let Ok(conn) = Connection::connect_to_env() else {
+        return false;
+    };
+    let Ok((globals, _queue)) = registry_queue_init::<WaylandClipboardMonitorState>(&conn) else {
+        return false;
+    };
+    globals.contents().with_list(|list| {
+        list.iter().any(|global| {
+            global.interface == ExtDataControlManagerV1::interface().name
+                || global.interface == ZwlrDataControlManagerV1::interface().name
+        })
+    })
+}
+
 #[derive(Default)]
 struct KdeBlurState;
 
@@ -2133,6 +2249,11 @@ fn primary_content_mime_type(mime_types: &[String]) -> Option<String> {
 }
 
 fn read_clipboard_bytes(mime_type: &str) -> Option<Vec<u8>> {
+    if clipboard_path() == ClipboardPath::GnomeExtension {
+        return gnome_bridge::STORE
+            .snapshot()
+            .and_then(|snapshot| snapshot.bytes(mime_type));
+    }
     if is_wayland_session() {
         let (mut pipe, _) = get_contents(
             ClipboardType::Regular,
@@ -2156,6 +2277,12 @@ fn read_clipboard_bytes(mime_type: &str) -> Option<Vec<u8>> {
 }
 
 fn read_clipboard_mime_types() -> Vec<String> {
+    if clipboard_path() == ClipboardPath::GnomeExtension {
+        return gnome_bridge::STORE
+            .snapshot()
+            .map(|snapshot| snapshot.mimetypes)
+            .unwrap_or_default();
+    }
     if is_wayland_session() {
         return get_mime_types_ordered(ClipboardType::Regular, Seat::Unspecified)
             .unwrap_or_default();
@@ -2334,6 +2461,47 @@ fn write_via_command_bytes(program: &str, args: &[&str], value: &[u8]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x11_sessions_use_the_x11_path() {
+        assert_eq!(
+            choose_clipboard_path(false, false, Some("ubuntu:GNOME")),
+            ClipboardPath::X11
+        );
+    }
+
+    #[test]
+    fn wayland_with_data_control_uses_it_even_on_gnome() {
+        assert_eq!(
+            choose_clipboard_path(true, true, Some("ubuntu:GNOME")),
+            ClipboardPath::Wayland
+        );
+    }
+
+    #[test]
+    fn gnome_without_data_control_uses_the_extension() {
+        assert_eq!(
+            choose_clipboard_path(true, false, Some("ubuntu:GNOME")),
+            ClipboardPath::GnomeExtension
+        );
+        assert_eq!(
+            choose_clipboard_path(true, false, Some("GNOME")),
+            ClipboardPath::GnomeExtension
+        );
+    }
+
+    #[test]
+    fn other_desktops_without_data_control_keep_the_wayland_path() {
+        // The Wayland monitor then reports the missing protocol, as today.
+        assert_eq!(
+            choose_clipboard_path(true, false, Some("KDE")),
+            ClipboardPath::Wayland
+        );
+        assert_eq!(
+            choose_clipboard_path(true, false, None),
+            ClipboardPath::Wayland
+        );
+    }
 
     #[test]
     fn a_matching_echo_inside_the_window_is_ours() {

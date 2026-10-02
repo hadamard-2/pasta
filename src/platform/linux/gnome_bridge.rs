@@ -1,7 +1,6 @@
 //! Pasta's side of the GNOME Shell clipboard bridge: answers `Offer` with pipe
 //! write ends for the formats it wants, reads them, and publishes the result as
 //! the current clipboard snapshot.
-#![allow(dead_code)] // Temporary: removed once the bridge is wired in (Task 4).
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -248,17 +247,27 @@ impl ClipboardService {
 
 /// Registers Pasta's clipboard service on the session bus, once. The
 /// connection lives in a static so the service stays up for the process
-/// lifetime; zbus runs it on its own executor thread.
+/// lifetime. Pasta drives the connection's executor on its own thread so that
+/// thread ending (a panic in a handler) is reported as capture being
+/// unavailable instead of going unnoticed.
 pub(crate) fn ensure_service() -> Result<(), String> {
-    static SERVICE: std::sync::OnceLock<Result<zbus::blocking::Connection, String>> =
+    static SERVICE: std::sync::OnceLock<Result<zbus::Connection, String>> =
         std::sync::OnceLock::new();
     SERVICE
         .get_or_init(|| {
-            let built = zbus::blocking::connection::Builder::session()
-                .and_then(|builder| builder.name(PASTA_NAME))
-                .and_then(|builder| builder.serve_at(CLIPBOARD_PATH, ClipboardService))
-                .and_then(|builder| builder.build())
-                .map_err(|err| err.to_string());
+            let built = zbus::block_on(async {
+                zbus::connection::Builder::session()?
+                    .internal_executor(false)
+                    .name(PASTA_NAME)?
+                    .serve_at(CLIPBOARD_PATH, ClipboardService)?
+                    .build()
+                    .await
+            })
+            .map_err(|err| err.to_string())
+            .and_then(|conn| {
+                spawn_service_thread(conn.clone())?;
+                Ok(conn)
+            });
             if let Err(err) = &built {
                 eprintln!("warning: could not register {PASTA_NAME} on the session bus: {err}");
             }
@@ -267,6 +276,29 @@ pub(crate) fn ensure_service() -> Result<(), String> {
         .as_ref()
         .map(|_| ())
         .map_err(Clone::clone)
+}
+
+fn spawn_service_thread(conn: zbus::Connection) -> Result<(), String> {
+    std::thread::Builder::new()
+        .name("pasta-gnome-bridge".to_owned())
+        .spawn(move || {
+            let executor = conn.executor().clone();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                zbus::block_on(async {
+                    loop {
+                        executor.tick().await;
+                    }
+                })
+            }));
+            if outcome.is_err() {
+                eprintln!("warning: Pasta's GNOME clipboard service thread stopped");
+                super::set_clipboard_capture_blocked(
+                    "Pasta's clipboard service stopped, so copies are no longer captured. Restart Pasta.".to_owned(),
+                );
+            }
+        })
+        .map(|_| ())
+        .map_err(|err| format!("could not start the clipboard service thread: {err}"))
 }
 
 #[cfg(test)]

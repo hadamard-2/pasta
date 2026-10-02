@@ -745,17 +745,23 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
             if current_change_count != last_change_count {
                 last_change_count = current_change_count;
 
-                let clipboard_image = cx
-                    .update(|cx| {
-                        cx.read_from_clipboard().and_then(|item| {
-                            item.into_entries().find_map(|entry| match entry {
-                                ClipboardEntry::Image(image) => Some(image),
-                                _ => None,
+                // Paths that hold the clipboard bytes themselves hand the image
+                // over directly; the others read it through GPUI.
+                let clipboard_image = match read_clipboard_image() {
+                    Some(image) => Some(image),
+                    None => cx
+                        .update(|cx| {
+                            cx.read_from_clipboard().and_then(|item| {
+                                item.into_entries().find_map(|entry| match entry {
+                                    ClipboardEntry::Image(image) => Some(image),
+                                    _ => None,
+                                })
                             })
                         })
-                    })
-                    .ok()
-                    .flatten();
+                        .ok()
+                        .flatten()
+                        .map(|image| (image.bytes.clone(), image.format.mime_type().to_owned())),
+                };
 
                 // A file manager copying an image puts only a file *reference*
                 // on the clipboard, so fall back to reading the referenced
@@ -764,7 +770,7 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
                 // — a slow or stalled selection owner must not block the
                 // foreground executor that drives the UI, hotkey, and quit.
                 let clipboard_image = match clipboard_image {
-                    Some(image) => Some((image.bytes.clone(), image.format.mime_type().to_owned())),
+                    Some(image) => Some(image),
                     None => {
                         cx.background_executor()
                             .spawn(async { read_clipboard_file_image() })

@@ -1,7 +1,6 @@
 //! Pasta's client for the GNOME Shell clipboard bridge, plus the identity check
 //! the bridge service shares. Depends only on `std` and `zbus` so that
 //! `examples/gnome_bridge_write.rs` can compile this exact file.
-#![allow(dead_code)] // Temporary: removed once the bridge is wired in (Task 4).
 
 use std::path::Path;
 

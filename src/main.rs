@@ -685,7 +685,10 @@ fn main() {
             }
         };
 
-        if let Some((bytes, mime_type)) = read_clipboard_file_image() {
+        if uses_gnome_clipboard_extension() {
+            // The extension offers the current clipboard once Pasta's service
+            // is up, and the watcher stores it then; nothing to read here.
+        } else if let Some((bytes, mime_type)) = read_clipboard_file_image() {
             // The clipboard already holds a file-manager image reference at
             // startup; store the file itself, not its path.
             let _ = storage.upsert_clipboard_image_item(&bytes, &mime_type);
