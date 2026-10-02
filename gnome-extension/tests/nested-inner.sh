@@ -35,9 +35,10 @@ done
 
 export WAYLAND_DISPLAY="$DISPLAY_NAME" GDK_BACKEND=wayland XDG_CURRENT_DESKTOP=GNOME
 
-# On a freshly started shell the first client's clipboard set is silently
-# dropped by the compositor. Probe until a copy reads back, so no scenario's
-# first copy is the one that gets lost.
+# Observed: on a freshly started headless shell the first client's clipboard
+# copy never reads back, with or without the extension installed (cause not
+# identified). Probe until a copy reads back, so no scenario's first copy is
+# the one that gets lost.
 ready=no
 for n in 1 2 3 4 5; do
     python3 "$HERE/clip_tool.py" set-text "pasta-harness-probe-$n" &

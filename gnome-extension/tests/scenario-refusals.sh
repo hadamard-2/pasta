@@ -33,6 +33,7 @@ wait_for_line "$SHELL_LOG" "pasta-clipboard: rejected SetClipboard from /usr/bin
 # 4. Pasta's client refuses to write to an impostor bridge.
 busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell.Extensions DisableExtension s "$UUID" >/dev/null
 python3 "$HERE/clip_tool.py" impostor bridge 10 >"$NEST/impostor-bridge.log" 2>&1 &
+IMPOSTOR_PID=$!
 wait_for_line "$NEST/impostor-bridge.log" "IMPOSTOR owns com.pasta.Launcher.ShellBridge" 10
 printf 'secret' >"$NEST/secret.txt"
 if write_as_pasta "text/plain;charset=utf-8" "$NEST/secret.txt" 2>"$NEST/writer.err"; then
@@ -41,5 +42,7 @@ if write_as_pasta "text/plain;charset=utf-8" "$NEST/secret.txt" 2>"$NEST/writer.
 fi
 grep -q "is owned by /usr/bin/python3" "$NEST/writer.err" || { echo "FAIL unexpected writer error: $(cat "$NEST/writer.err")"; exit 1; }
 sleep 1
+kill "$IMPOSTOR_PID" 2>/dev/null || true
+wait "$IMPOSTOR_PID" 2>/dev/null || true
 refute_line "$NEST/impostor-bridge.log" "IMPOSTOR got"
 echo "PASS scenario-refusals"
