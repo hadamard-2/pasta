@@ -21,3 +21,14 @@ refute_line() {
     fi
     return 0
 }
+
+# start_pasta: run the spike service under the executable name the extension
+# trusts. Stderr goes to $NEST/pasta.log.
+REPO_ROOT=$(cd "$HERE/../.." && pwd)
+start_pasta() {
+    cp "$REPO_ROOT/target/debug/examples/gnome_bridge_spike" "$NEST/bin/pasta-launcher"
+    "$NEST/bin/pasta-launcher" serve 2>>"$NEST/pasta.log" &
+    PASTA_PID=$!
+    trap 'kill "$PASTA_PID" 2>/dev/null || true' EXIT
+    wait_for_line "$NEST/pasta.log" "serving com.pasta.Launcher" 10
+}
