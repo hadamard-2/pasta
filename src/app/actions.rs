@@ -638,7 +638,7 @@ impl LauncherView {
         if self.pinned {
             return true;
         }
-        if self.suppress_auto_hide {
+        if self.suppress_auto_hide || crate::platform::capture_fix_in_flight() {
             return true;
         }
         if let Some(until) = self.suppress_auto_hide_until {

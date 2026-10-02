@@ -37,6 +37,7 @@ use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_offer_v1:
 mod global_shortcuts;
 mod gnome_bridge;
 mod gnome_bridge_client;
+mod gnome_extension_status;
 mod polkit;
 
 pub(crate) use global_shortcuts::{PortalOutcome, run_show_launcher_shortcut};
@@ -48,9 +49,10 @@ use wl_clipboard_rs::paste::{
 
 use crate::storage::ClipboardStorage;
 use crate::{
-    ABOUT_WINDOW_HEIGHT, ABOUT_WINDOW_WIDTH, AboutWindowState, AutoClearState, LAUNCHER_HEIGHT,
-    LAUNCHER_WIDTH, LauncherExitIntent, LauncherView, MENU_COMMAND_TX, MenuCommand, NEURAL_STATUS,
-    NeuralStatus, Palette, SelfClipboardWriteState, UiStyleState, palette_for,
+    ABOUT_WINDOW_HEIGHT, ABOUT_WINDOW_WIDTH, AboutWindowState, AutoClearState, CaptureFixAction,
+    LAUNCHER_HEIGHT, LAUNCHER_WIDTH, LauncherExitIntent, LauncherView, MENU_COMMAND_TX,
+    MenuCommand, NEURAL_STATUS, NeuralStatus, Palette, SelfClipboardWriteState, UiStyleState,
+    palette_for,
 };
 
 // ---------------------------------------------------------------------------
@@ -263,6 +265,71 @@ fn clipboard_capture_block() -> &'static Mutex<Option<String>> {
     BLOCK.get_or_init(|| Mutex::new(None))
 }
 
+/// The GNOME extension's current notice. Unlike the first-reason-wins block
+/// above, it is replaced as the extension's state changes and cleared once
+/// the extension is active.
+static GNOME_CAPTURE_NOTICE: Mutex<Option<(String, Option<CaptureFixAction>)>> = Mutex::new(None);
+
+/// True while a capture fix the user clicked is still running. GNOME Shell may
+/// briefly take focus while it enables the extension; the launcher must not
+/// treat that as the user leaving.
+static CAPTURE_FIX_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+fn set_gnome_capture_notice(notice: Option<(String, Option<CaptureFixAction>)>) {
+    *GNOME_CAPTURE_NOTICE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = notice;
+    if let Some(tx) = MENU_COMMAND_TX.get() {
+        let _ = tx.send(MenuCommand::ClipboardCaptureStatusChanged);
+    }
+}
+
+/// The one-click fix for the current notice, if it has one.
+#[allow(dead_code)] // used by the launcher banner (next commit)
+pub(crate) fn clipboard_capture_fix_action() -> Option<CaptureFixAction> {
+    GNOME_CAPTURE_NOTICE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .and_then(|(_, action)| *action)
+}
+
+/// Whether a clicked capture fix is still running; the launcher suppresses its
+/// blur auto-hide meanwhile.
+pub(crate) fn capture_fix_in_flight() -> bool {
+    CAPTURE_FIX_IN_FLIGHT.load(Ordering::SeqCst)
+}
+
+/// Runs a fix the user clicked. Off the UI thread: it is a D-Bus round trip
+/// to the shell, and the resulting state change arrives through the status
+/// watcher.
+#[allow(dead_code)] // used by the launcher banner (next commit)
+pub(crate) fn run_capture_fix_action(action: CaptureFixAction) {
+    match action {
+        CaptureFixAction::EnableGnomeExtension => {
+            CAPTURE_FIX_IN_FLIGHT.store(true, Ordering::SeqCst);
+            let spawned = std::thread::Builder::new()
+                .name("pasta-gnome-enable".to_owned())
+                .spawn(|| {
+                    match gnome_extension_status::enable_extension() {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            eprintln!("warning: GNOME Shell declined to enable the extension")
+                        }
+                        Err(err) => {
+                            eprintln!("warning: enabling the GNOME extension failed: {err}")
+                        }
+                    }
+                    CAPTURE_FIX_IN_FLIGHT.store(false, Ordering::SeqCst);
+                });
+            if let Err(err) = spawned {
+                CAPTURE_FIX_IN_FLIGHT.store(false, Ordering::SeqCst);
+                eprintln!("warning: could not start GNOME enable thread: {err}");
+            }
+        }
+    }
+}
+
 /// First reason wins: the earliest failure is the root cause, and later ones
 /// are usually just consequences of it.
 fn keep_first_reason(current: &mut Option<String>, reason: String) {
@@ -285,6 +352,13 @@ pub(crate) fn clipboard_capture_unavailable_reason() -> Option<String> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone()
+        .or_else(|| {
+            GNOME_CAPTURE_NOTICE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .map(|(text, _)| text.clone())
+        })
 }
 
 /// Explanation for a Wayland monitor that refused to start.
@@ -313,13 +387,19 @@ fn x11_capture_block_reason(has_xclip: bool, has_xsel: bool) -> Option<String> {
 /// Check the parts of clipboard capture we can know about up front. The Wayland
 /// monitor reports itself asynchronously when its thread fails to start.
 pub(crate) fn probe_clipboard_capture() {
-    if is_wayland_session() {
-        return;
-    }
-    if let Some(reason) = x11_capture_block_reason(command_exists("xclip"), command_exists("xsel"))
-    {
-        eprintln!("warning: {reason}");
-        set_clipboard_capture_blocked(reason);
+    match clipboard_path() {
+        ClipboardPath::Wayland => {}
+        ClipboardPath::GnomeExtension => {
+            gnome_extension_status::spawn_status_watcher(set_gnome_capture_notice);
+        }
+        ClipboardPath::X11 => {
+            if let Some(reason) =
+                x11_capture_block_reason(command_exists("xclip"), command_exists("xsel"))
+            {
+                eprintln!("warning: {reason}");
+                set_clipboard_capture_blocked(reason);
+            }
+        }
     }
 }
 

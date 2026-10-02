@@ -323,3 +323,16 @@ pub(crate) fn clipboard_capture_unavailable_reason() -> Option<String> {
 
 /// No-op counterpart to the Linux probe.
 pub(crate) fn probe_clipboard_capture() {}
+
+/// No-op counterpart to the Linux capture-fix actions.
+pub(crate) fn clipboard_capture_fix_action() -> Option<crate::CaptureFixAction> {
+    None
+}
+
+/// No-op counterpart to the Linux capture-fix actions.
+pub(crate) fn run_capture_fix_action(_action: crate::CaptureFixAction) {}
+
+/// No-op counterpart: macOS has no capture fix that can be in flight.
+pub(crate) fn capture_fix_in_flight() -> bool {
+    false
+}

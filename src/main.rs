@@ -178,6 +178,14 @@ pub(crate) const MENU_TAG_LAUNCH_AT_LOGIN: isize = 311;
 
 static MENU_COMMAND_TX: OnceLock<mpsc::Sender<MenuCommand>> = OnceLock::new();
 
+/// A one-click fix the launcher can offer when clipboard capture is
+/// unavailable. Only the Linux GNOME path produces one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) enum CaptureFixAction {
+    EnableGnomeExtension,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum MenuCommand {
     ShowLauncher,
@@ -190,6 +198,9 @@ pub(crate) enum MenuCommand {
     RequestClearHistory,
     PerformClearHistory,
     ToggleLaunchAtLogin,
+    /// The reason clipboard capture is unavailable (or its fix) changed.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    ClipboardCaptureStatusChanged,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

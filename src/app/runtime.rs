@@ -102,6 +102,14 @@ fn resolve_app_icon_path() -> Option<String> {
 fn handle_menu_command(command: MenuCommand, cx: &mut App) {
     match command {
         MenuCommand::ShowLauncher => show_launcher(cx),
+        MenuCommand::ClipboardCaptureStatusChanged => {
+            if let Some(window) = cx
+                .try_global::<LauncherState>()
+                .and_then(|state| state.window)
+            {
+                let _ = window.update(cx, |_view, _window, cx| cx.notify());
+            }
+        }
         MenuCommand::QuitApp => {
             let mut should_terminate_now = true;
             if let Some(window) = cx
