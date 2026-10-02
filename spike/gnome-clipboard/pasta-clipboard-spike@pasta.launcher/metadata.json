@@ -1,6 +1,0 @@
-{
-  "uuid": "pasta-clipboard-spike@pasta.launcher",
-  "name": "Pasta clipboard spike",
-  "description": "Throwaway spike. Not for installation in a live session.",
-  "shell-version": ["50"]
-}

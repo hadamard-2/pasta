@@ -1,4 +1,5 @@
-"""Test clients for the GNOME clipboard spike. Only ever run inside nested-shell.sh."""
+"""Test clients for the GNOME extension harness. Only ever run inside nested-shell.sh."""
+import os
 import sys
 
 import gi
@@ -13,42 +14,76 @@ def hold_clipboard(fill, hold_seconds=3.0):
 
     def activate(app):
         window = Gtk.ApplicationWindow(application=app)
-        window.present()
         clipboard = window.get_display().get_clipboard()
+
+        window.present()
         GLib.timeout_add(500, lambda: (fill(clipboard), False)[1])
         GLib.timeout_add(int(hold_seconds * 1000), lambda: (app.quit(), False)[1])
 
-    app = Gtk.Application(application_id="dev.pasta.SpikeClip", flags=Gio.ApplicationFlags.NON_UNIQUE)
+    app = Gtk.Application(application_id="dev.pasta.GnomeTestClip", flags=Gio.ApplicationFlags.NON_UNIQUE)
     app.connect("activate", activate)
     app.run(None)
+
+
+def provider(mimetype, data):
+    return Gdk.ContentProvider.new_for_bytes(mimetype, GLib.Bytes.new(data))
 
 
 def set_text(text):
     hold_clipboard(lambda clipboard: clipboard.set(text))
 
 
-def make_png(path, width, height, noise_every_n_rows):
-    """Write a PNG whose size is controlled by how many rows are random noise."""
-    import os
+def get_text():
+    """Print the clipboard's text, or nothing if it holds none."""
 
-    gi.require_version("GdkPixbuf", "2.0")
-    from gi.repository import GdkPixbuf
+    def activate(app):
+        window = Gtk.ApplicationWindow(application=app)
+        window.present()
 
-    width, height, every = int(width), int(height), int(noise_every_n_rows)
-    rowstride = width * 3
-    pixels = bytearray(rowstride * height)
-    for y in range(height):
-        row = os.urandom(rowstride) if y % every == 0 else bytes([y % 256, 90, 200]) * width
-        pixels[y * rowstride:(y + 1) * rowstride] = row
-    pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(
-        GLib.Bytes.new(bytes(pixels)), GdkPixbuf.Colorspace.RGB, False, 8, width, height, rowstride)
-    pixbuf.savev(path, "png", [], [])
+        def done(clipboard, result):
+            try:
+                print(clipboard.read_text_finish(result) or "", flush=True)
+            except GLib.Error:
+                pass
+            app.quit()
+
+        GLib.timeout_add(500, lambda: (window.get_display().get_clipboard().read_text_async(None, done), False)[1])
+        GLib.timeout_add_seconds(5, lambda: (app.quit(), False)[1])
+
+    app = Gtk.Application(application_id="dev.pasta.GnomeTestClip", flags=Gio.ApplicationFlags.NON_UNIQUE)
+    app.connect("activate", activate)
+    app.run(None)
 
 
 def set_file(mimetype, path):
     data = open(path, "rb").read()
-    hold_clipboard(lambda clipboard: clipboard.set_content(
-        Gdk.ContentProvider.new_for_bytes(mimetype, GLib.Bytes.new(data))))
+    hold_clipboard(lambda clipboard: clipboard.set_content(provider(mimetype, data)))
+
+
+def set_file_reference(path):
+    """Copy a file the way Nautilus does: a reference, not the bytes."""
+    uri = "file://" + os.path.abspath(path)
+    hold_clipboard(lambda clipboard: clipboard.set_content(Gdk.ContentProvider.new_union([
+        provider("x-special/gnome-copied-files", ("copy\n" + uri).encode()),
+        provider("text/uri-list", (uri + "\r\n").encode()),
+        provider("text/plain;charset=utf-8", uri.encode()),
+    ])))
+
+
+def make_png(path, width, height):
+    """Write a PNG with some noise rows so its size is non-trivial."""
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf
+
+    width, height = int(width), int(height)
+    rowstride = width * 3
+    pixels = bytearray(rowstride * height)
+    for y in range(height):
+        row = os.urandom(rowstride) if y % 5 == 0 else bytes([y % 256, 90, 200]) * width
+        pixels[y * rowstride:(y + 1) * rowstride] = row
+    GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(bytes(pixels)), GdkPixbuf.Colorspace.RGB, False, 8, width, height, rowstride
+    ).savev(path, "png", [], [])
 
 
 IMPOSTORS = {
@@ -94,8 +129,6 @@ def impostor(kind, seconds):
 
 def poke_bridge():
     """Call SetClipboard as a process that is not pasta-launcher."""
-    import os
-
     connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     read_end, write_end = os.pipe()
     os.write(write_end, b"poke")
@@ -114,8 +147,10 @@ def poke_bridge():
 
 COMMANDS = {
     "set-text": set_text,
-    "make-png": make_png,
+    "get-text": get_text,
     "set-file": set_file,
+    "set-file-reference": set_file_reference,
+    "make-png": make_png,
     "impostor": impostor,
     "poke-bridge": poke_bridge,
 }
