@@ -8,7 +8,7 @@
 #[cfg(target_os = "linux")]
 mod spike {
     use std::collections::HashMap;
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
     use std::time::Instant;
 
@@ -149,10 +149,54 @@ mod spike {
         }
     }
 
+    const BRIDGE_NAME: &str = "com.pasta.Launcher.ShellBridge";
+    const BRIDGE_PATH: &str = "/com/pasta/Launcher/ShellBridge";
+    const BRIDGE_IFACE: &str = "com.pasta.Launcher.ShellBridge1";
+
+    /// Sends `file` to the clipboard through the shell's bridge, after checking
+    /// that the bridge name is held by the installed gnome-shell.
+    fn write(mime: &str, file: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let bytes = std::fs::read(file)?;
+        let sha = short_sha256(&bytes);
+        let len = bytes.len();
+
+        let conn = zbus::blocking::Connection::session()?;
+        let dbus = zbus::blocking::fdo::DBusProxy::new(&conn)?;
+        let owner = dbus.get_name_owner(zbus::names::BusName::try_from(BRIDGE_NAME)?)?;
+        let pid = dbus.get_connection_unix_process_id((&owner).into())?;
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe"))?;
+        if !is_shell_executable(&exe) {
+            log(&format!(
+                "refusing to write: {BRIDGE_NAME} is owned by {}",
+                exe.display()
+            ));
+            return Err(format!("{BRIDGE_NAME} is not owned by {SHELL_EXE}").into());
+        }
+
+        let (reader, mut writer) = std::io::pipe()?;
+        let feeder = std::thread::spawn(move || writer.write_all(&bytes));
+        let reply = conn.call_method(
+            Some(owner.as_str()),
+            BRIDGE_PATH,
+            Some(BRIDGE_IFACE),
+            "SetClipboard",
+            &(mime, zbus::zvariant::Fd::from(&reader)),
+        );
+        // Drop our read end before joining: if the call failed without the
+        // peer reading, the feeder then gets EPIPE instead of blocking forever.
+        drop(reader);
+        let fed = feeder.join().map_err(|_| "feeder thread panicked")?;
+        reply?;
+        fed?;
+        log(&format!("WROTE {mime} {len} bytes sha256={sha}"));
+        Ok(())
+    }
+
     pub(crate) fn main() {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let result = match args.as_slice() {
             [command] if command == "serve" => serve(),
+            [command, mime, file] if command == "write" => write(mime, Path::new(file)),
             _ => Err("usage: gnome_bridge_spike serve | write <mimetype> <file>".into()),
         };
         if let Err(err) = result {

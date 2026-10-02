@@ -52,7 +52,17 @@ Both directions show executable-based gating, but with different scopes and enfo
 
 **Extension → Pasta**: The extension calls `Offer` on whoever holds `com.pasta.Launcher`, and will refuse to send content if the name owner's executable basename is not `pasta-launcher`. Impostor scenario (`scenario-impostor-pasta.sh`, Task 4): when a Python process claims the name, the extension logs `PASTA-SPIKE refusing to offer: com.pasta.Launcher is owned by /usr/bin/python3` and sends nothing. The check is basename-only (not full path or file ownership), so any native executable named `pasta-launcher` running as the user passes it—including a copied binary, a hard link, or any program compiled under that name.
 
+**Task 5 refusals**: (1) Non-Pasta caller to the bridge: `clip_tool.py poke-bridge` from python gets `GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: /usr/bin/python3.14 is not pasta-launcher` and the shell logs `rejected SetClipboard from /usr/bin/python3.14` (the exe path is the resolved interpreter, python3.14, not the `python3` symlink). (2) Impostor bridge: with the extension disabled and a Python process owning `com.pasta.Launcher.ShellBridge`, `pasta-launcher write` logs `refusing to write: com.pasta.Launcher.ShellBridge is owned by /usr/bin/python3.14`, exits non-zero, and the impostor logs no `IMPOSTOR got` call, so no content reached it.
+
+`SHELL_EXE` is hard-coded to `/usr/bin/gnome-shell`, which is correct for Debian/Ubuntu, Fedora and Arch packaging but not for layouts such as NixOS store paths.
+
 ### Write-back
+
+`scenario-write.sh` (Task 5) writes text (16 bytes) and a 3173374-byte PNG through `SetClipboard`: Pasta logs `WROTE` and the shell logs `SetClipboard` with the same 12-hex hash as the source file, and the resulting `owner-changed` makes the extension offer the bytes straight back, so Pasta logs `RECEIVED` with the identical hash (text 0 ms, PNG 14 ms for the echo read).
+
+The shell-side timestamps put the text write and the PNG write plus its echo within about 60 ms of each other end to end (about 3 MB image; not separately timed, so treat as an upper bound on one write).
+
+The echo means a write by Pasta is indistinguishable from a user copy at the Offer layer; the real implementation needs its own loop suppression (inference: for example by remembering the hash it just wrote).
 
 ## Implications for the real implementation
 

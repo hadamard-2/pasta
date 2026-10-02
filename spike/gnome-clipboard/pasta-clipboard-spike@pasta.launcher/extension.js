@@ -1,6 +1,7 @@
 import Meta from 'gi://Meta';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {offerToPasta} from './offer.js';
+import {ShellBridge} from './bridge.js';
 
 function log(message) {
     console.log(`PASTA-SPIKE ${message}`);
@@ -20,10 +21,13 @@ export default class PastaClipboardSpike extends Extension {
                 return;
             offerToPasta(selection, mimetypes, log).catch(e => log(`offer failed: ${e.message}`));
         });
+        this._bridge = new ShellBridge(log);
         log('enabled');
     }
 
     disable() {
+        this._bridge.destroy();
+        this._bridge = null;
         this._selection.disconnect(this._ownerChangedId);
         this._selection = null;
         log('disabled');

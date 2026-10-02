@@ -92,11 +92,32 @@ def impostor(kind, seconds):
     loop.run()
 
 
+def poke_bridge():
+    """Call SetClipboard as a process that is not pasta-launcher."""
+    import os
+
+    connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    read_end, write_end = os.pipe()
+    os.write(write_end, b"poke")
+    os.close(write_end)
+    fds = Gio.UnixFDList.new_from_array([read_end])
+    try:
+        connection.call_with_unix_fd_list_sync(
+            "com.pasta.Launcher.ShellBridge", "/com/pasta/Launcher/ShellBridge",
+            "com.pasta.Launcher.ShellBridge1", "SetClipboard",
+            GLib.Variant("(sh)", ("text/plain;charset=utf-8", 0)), None,
+            Gio.DBusCallFlags.NONE, 5000, fds, None)
+        print("POKE accepted", flush=True)
+    except GLib.Error as error:
+        print(f"POKE rejected: {error.message}", flush=True)
+
+
 COMMANDS = {
     "set-text": set_text,
     "make-png": make_png,
     "set-file": set_file,
     "impostor": impostor,
+    "poke-bridge": poke_bridge,
 }
 
 if __name__ == "__main__":
