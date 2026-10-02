@@ -19,6 +19,56 @@ pub(crate) fn is_shell_executable(exe: &Path) -> bool {
     path.strip_suffix(" (deleted)").unwrap_or(&path) == SHELL_EXE
 }
 
+const BRIDGE_NAME: &str = "com.pasta.Launcher.ShellBridge";
+const BRIDGE_PATH: &str = "/com/pasta/Launcher/ShellBridge";
+const BRIDGE_IFACE: &str = "com.pasta.Launcher.ShellBridge1";
+
+/// Puts `bytes` on the clipboard as `mimetype` through the shell's bridge,
+/// after checking that the bridge name is held by the installed gnome-shell.
+/// Blocks until the shell has read the payload; call it off the UI thread.
+pub(crate) fn set_clipboard(mimetype: &str, bytes: Vec<u8>) -> Result<(), String> {
+    use std::io::Write;
+
+    if bytes.len() > MAX_PAYLOAD_BYTES {
+        return Err(format!(
+            "{} bytes exceeds the {MAX_PAYLOAD_BYTES}-byte limit",
+            bytes.len()
+        ));
+    }
+    let conn = zbus::blocking::Connection::session().map_err(|err| err.to_string())?;
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&conn).map_err(|err| err.to_string())?;
+    let name = zbus::names::BusName::try_from(BRIDGE_NAME).map_err(|err| err.to_string())?;
+    let owner = dbus.get_name_owner(name).map_err(|err| err.to_string())?;
+    let pid = dbus
+        .get_connection_unix_process_id((&owner).into())
+        .map_err(|err| err.to_string())?;
+    let exe = std::fs::read_link(format!("/proc/{pid}/exe")).map_err(|err| err.to_string())?;
+    if !is_shell_executable(&exe) {
+        return Err(format!(
+            "{BRIDGE_NAME} is owned by {}, not {SHELL_EXE}",
+            exe.display()
+        ));
+    }
+
+    let (reader, mut writer) = std::io::pipe().map_err(|err| err.to_string())?;
+    let feeder = std::thread::spawn(move || writer.write_all(&bytes));
+    let reply = conn.call_method(
+        Some(owner.as_str()),
+        BRIDGE_PATH,
+        Some(BRIDGE_IFACE),
+        "SetClipboard",
+        &(mimetype, zbus::zvariant::Fd::from(&reader)),
+    );
+    // Drop our read end before joining: if the shell refused without reading,
+    // the feeder then gets EPIPE instead of blocking forever.
+    drop(reader);
+    let fed = feeder
+        .join()
+        .map_err(|_| "clipboard feeder thread panicked".to_owned())?;
+    reply.map_err(|err| err.to_string())?;
+    fed.map_err(|err| err.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,9 +3,17 @@
 //! the current clipboard snapshot.
 #![allow(dead_code)] // Temporary: removed once the bridge is wired in (Task 4).
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
+
+use super::gnome_bridge_client::{MAX_PAYLOAD_BYTES, SHELL_EXE, is_shell_executable};
+
+const PASTA_NAME: &str = "com.pasta.Launcher";
+const CLIPBOARD_PATH: &str = "/com/pasta/Launcher/Clipboard";
 
 /// How long one payload may take to arrive before Pasta gives up on it.
 pub(crate) const PAYLOAD_DEADLINE: Duration = Duration::from_secs(5);
@@ -79,6 +87,186 @@ pub(crate) fn read_payload(
             Err(err) => return Err(PayloadError::Io(err.to_string())),
         }
     }
+}
+
+/// The most recent clipboard contents the shell offered, as far as Pasta read
+/// them: every offered format name, plus the payloads it asked for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GnomeClipboardSnapshot {
+    pub(crate) mimetypes: Vec<String>,
+    pub(crate) payloads: HashMap<String, Vec<u8>>,
+}
+
+impl GnomeClipboardSnapshot {
+    pub(crate) fn text(&self) -> Option<String> {
+        ["text/plain;charset=utf-8", "text/plain"]
+            .iter()
+            .find_map(|mime| self.payloads.get(*mime))
+            .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+    }
+
+    pub(crate) fn image(&self) -> Option<(Vec<u8>, String)> {
+        self.mimetypes
+            .iter()
+            .filter(|mime| mime.starts_with("image/"))
+            .find_map(|mime| {
+                self.payloads
+                    .get(mime)
+                    .map(|bytes| (bytes.clone(), mime.clone()))
+            })
+    }
+
+    pub(crate) fn bytes(&self, mime: &str) -> Option<Vec<u8>> {
+        self.payloads.get(mime).cloned()
+    }
+}
+
+/// Latest snapshot plus a counter the clipboard watcher compares, mirroring
+/// the change counters of the other clipboard paths.
+pub(crate) struct SnapshotStore {
+    snapshot: Mutex<Option<GnomeClipboardSnapshot>>,
+    change_count: AtomicI64,
+}
+
+impl SnapshotStore {
+    pub(crate) const fn new() -> Self {
+        Self {
+            snapshot: Mutex::new(None),
+            change_count: AtomicI64::new(0),
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> Option<GnomeClipboardSnapshot> {
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn change_count(&self) -> i64 {
+        self.change_count.load(Ordering::Acquire)
+    }
+
+    fn publish(&self, snapshot: GnomeClipboardSnapshot) {
+        *self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(snapshot);
+        self.change_count.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) static STORE: SnapshotStore = SnapshotStore::new();
+
+/// Reads every wanted payload of one offer on its own thread, then publishes
+/// the snapshot once all of them have finished or been given up on.
+fn collect_offer(mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
+    let spawned = std::thread::Builder::new()
+        .name("pasta-gnome-offer".to_owned())
+        .spawn(move || {
+            let mut payloads = HashMap::new();
+            for (mime, fd) in readers {
+                match read_payload(fd, MAX_PAYLOAD_BYTES, PAYLOAD_DEADLINE) {
+                    Ok(bytes) => {
+                        payloads.insert(mime, bytes);
+                    }
+                    Err(err) => {
+                        eprintln!("warning: GNOME clipboard payload {mime} dropped: {err:?}");
+                    }
+                }
+            }
+            let mut summary: Vec<String> = payloads
+                .iter()
+                .map(|(mime, bytes)| format!("{mime}={}", bytes.len()))
+                .collect();
+            summary.sort();
+            eprintln!(
+                "info: GNOME clipboard snapshot published: mimetypes={mimetypes:?} payloads=[{}]",
+                summary.join(", ")
+            );
+            STORE.publish(GnomeClipboardSnapshot {
+                mimetypes,
+                payloads,
+            });
+        });
+    if let Err(err) = spawned {
+        eprintln!("warning: could not start GNOME clipboard reader thread: {err}");
+    }
+}
+
+async fn executable_of(
+    conn: &zbus::Connection,
+    name: zbus::names::BusName<'_>,
+) -> zbus::fdo::Result<std::path::PathBuf> {
+    let pid = zbus::fdo::DBusProxy::new(conn)
+        .await?
+        .get_connection_unix_process_id(name)
+        .await?;
+    std::fs::read_link(format!("/proc/{pid}/exe"))
+        .map_err(|err| zbus::fdo::Error::Failed(format!("reading /proc/{pid}/exe: {err}")))
+}
+
+struct ClipboardService;
+
+#[zbus::interface(name = "com.pasta.Launcher.Clipboard1")]
+impl ClipboardService {
+    /// Answers a clipboard change with one pipe write end per wanted format.
+    async fn offer(
+        &self,
+        mimetypes: Vec<String>,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<HashMap<String, zbus::zvariant::OwnedFd>> {
+        let caller = header
+            .sender()
+            .ok_or_else(|| zbus::fdo::Error::AccessDenied("message has no sender".to_owned()))?
+            .to_owned();
+        let exe = executable_of(conn, caller.into()).await?;
+        if !is_shell_executable(&exe) {
+            eprintln!(
+                "warning: refused GNOME clipboard Offer from {}",
+                exe.display()
+            );
+            return Err(zbus::fdo::Error::AccessDenied(format!(
+                "{} is not {SHELL_EXE}",
+                exe.display()
+            )));
+        }
+
+        let mut writers = HashMap::new();
+        let mut readers = Vec::new();
+        for mime in select_wanted_mimes(&mimetypes) {
+            let (reader, writer) =
+                std::io::pipe().map_err(|err| zbus::fdo::Error::Failed(format!("pipe: {err}")))?;
+            readers.push((mime.clone(), OwnedFd::from(reader)));
+            writers.insert(mime, OwnedFd::from(writer).into());
+        }
+        collect_offer(mimetypes, readers);
+        Ok(writers)
+    }
+}
+
+/// Registers Pasta's clipboard service on the session bus, once. The
+/// connection lives in a static so the service stays up for the process
+/// lifetime; zbus runs it on its own executor thread.
+pub(crate) fn ensure_service() -> Result<(), String> {
+    static SERVICE: std::sync::OnceLock<Result<zbus::blocking::Connection, String>> =
+        std::sync::OnceLock::new();
+    SERVICE
+        .get_or_init(|| {
+            let built = zbus::blocking::connection::Builder::session()
+                .and_then(|builder| builder.name(PASTA_NAME))
+                .and_then(|builder| builder.serve_at(CLIPBOARD_PATH, ClipboardService))
+                .and_then(|builder| builder.build())
+                .map_err(|err| err.to_string());
+            if let Err(err) = &built {
+                eprintln!("warning: could not register {PASTA_NAME} on the session bus: {err}");
+            }
+            built
+        })
+        .as_ref()
+        .map(|_| ())
+        .map_err(Clone::clone)
 }
 
 #[cfg(test)]
@@ -155,5 +343,64 @@ mod tests {
         assert_eq!(result, Err(PayloadError::DeadlineExceeded));
         assert!(started.elapsed() < Duration::from_secs(2));
         drop(writer);
+    }
+
+    fn snapshot(mimes: &[&str], payloads: &[(&str, &[u8])]) -> GnomeClipboardSnapshot {
+        GnomeClipboardSnapshot {
+            mimetypes: strings(mimes),
+            payloads: payloads
+                .iter()
+                .map(|(mime, bytes)| ((*mime).to_owned(), bytes.to_vec()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn snapshot_text_prefers_utf8() {
+        let snap = snapshot(
+            &["text/plain", "text/plain;charset=utf-8"],
+            &[("text/plain;charset=utf-8", "héllo".as_bytes())],
+        );
+        assert_eq!(snap.text().as_deref(), Some("héllo"));
+    }
+
+    #[test]
+    fn snapshot_text_falls_back_to_bare_text_plain() {
+        let snap = snapshot(&["text/plain"], &[("text/plain", b"plain")]);
+        assert_eq!(snap.text().as_deref(), Some("plain"));
+    }
+
+    #[test]
+    fn snapshot_image_is_the_first_offered_image_that_arrived() {
+        let snap = snapshot(
+            &["image/png", "text/plain"],
+            &[("image/png", b"\x89PNG"), ("text/plain", b"caption")],
+        );
+        assert_eq!(
+            snap.image(),
+            Some((b"\x89PNG".to_vec(), "image/png".to_owned()))
+        );
+    }
+
+    #[test]
+    fn snapshot_without_image_payload_has_no_image() {
+        let snap = snapshot(&["image/png"], &[]);
+        assert_eq!(snap.image(), None);
+    }
+
+    #[test]
+    fn publishing_replaces_the_snapshot_and_bumps_the_counter() {
+        // A local store, not the process-global one, so this test does not
+        // depend on the order other tests run in.
+        let store = SnapshotStore::new();
+        assert_eq!(store.change_count(), 0);
+        assert_eq!(store.snapshot(), None);
+        store.publish(snapshot(&["text/plain"], &[("text/plain", b"a")]));
+        store.publish(snapshot(&["text/plain"], &[("text/plain", b"b")]));
+        assert_eq!(store.change_count(), 2);
+        assert_eq!(
+            store.snapshot().and_then(|s| s.text()).as_deref(),
+            Some("b")
+        );
     }
 }
