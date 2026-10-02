@@ -516,6 +516,14 @@ pub(crate) fn read_clipboard_snapshot() -> Option<ClipboardSnapshot> {
     })
 }
 
+/// Whether clipboard content hashing to `hash` is an echo of Pasta's own
+/// pending write. A match does not consume the pending entry: one write can
+/// come back several times (each write path and each clipboard replay fires
+/// its own change), and every one of those echoes is ours until it expires.
+fn is_self_write_echo(due_at: Instant, expected_hash: &str, now: Instant, hash: &str) -> bool {
+    now <= due_at && hash == expected_hash
+}
+
 /// Returns true if we should ignore this clipboard write because we
 /// ourselves just wrote it.
 pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, bytes: &[u8]) -> bool {
@@ -524,17 +532,18 @@ pub(crate) fn should_ignore_self_clipboard_write(cx: &mut App, bytes: &[u8]) -> 
         .and_then(|state| state.pending.clone());
     let Some(pending) = pending else { return false };
 
-    if Instant::now() > pending.due_at {
+    let now = Instant::now();
+    if now > pending.due_at {
         cx.global_mut::<SelfClipboardWriteState>().pending = None;
         return false;
     }
 
-    if clipboard_bytes_hash(bytes) == pending.expected_hash {
-        cx.global_mut::<SelfClipboardWriteState>().pending = None;
-        return true;
-    }
-
-    false
+    is_self_write_echo(
+        pending.due_at,
+        &pending.expected_hash,
+        now,
+        &clipboard_bytes_hash(bytes),
+    )
 }
 
 /// Process secret auto-clear timer.
@@ -2323,6 +2332,44 @@ fn write_via_command_bytes(program: &str, args: &[&str], value: &[u8]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_matching_echo_inside_the_window_is_ours() {
+        let now = Instant::now();
+        let due = now + std::time::Duration::from_secs(5);
+        assert!(is_self_write_echo(due, "abc", now, "abc"));
+    }
+
+    #[test]
+    fn every_echo_inside_the_window_is_ours_not_just_the_first() {
+        let now = Instant::now();
+        let due = now + std::time::Duration::from_secs(5);
+        assert!(is_self_write_echo(due, "abc", now, "abc"));
+        assert!(is_self_write_echo(
+            due,
+            "abc",
+            now + std::time::Duration::from_secs(1),
+            "abc"
+        ));
+    }
+
+    #[test]
+    fn different_content_is_not_an_echo() {
+        let now = Instant::now();
+        let due = now + std::time::Duration::from_secs(5);
+        assert!(!is_self_write_echo(due, "abc", now, "def"));
+    }
+
+    #[test]
+    fn an_echo_after_the_window_is_not_ours() {
+        let now = Instant::now();
+        assert!(!is_self_write_echo(
+            now,
+            "abc",
+            now + std::time::Duration::from_millis(1),
+            "abc"
+        ));
+    }
 
     #[test]
     fn parses_gnome_copied_files_payload() {
