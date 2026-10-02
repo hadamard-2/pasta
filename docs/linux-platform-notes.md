@@ -89,6 +89,22 @@ It only works when the portal can resolve that id to an *installed* `com.pasta.l
 - **Two instances fight over the shortcut id.** A second process binding `pasta-show-launcher` while the first still holds it can leave the second's `BindShortcuts` hanging with no response. The single-instance `flock` prevents this in production; in development it is easy to hit by leaving a test client running. Check for strays before concluding the code is at fault.
 - Absence of the `pasta: global shortcut registered with the desktop portal (…)` line on stderr is the signal that the portal path did not complete.
 
+## Clipboard on GNOME: the clipboard@pasta.launcher extension
+
+GNOME 50 has no X11 session and its compositor implements neither `ext-data-control-v1` nor `wlr-data-control-v1`, deliberately: background apps cannot watch the clipboard. Code inside GNOME Shell can, so Pasta ships a small extension (`gnome-extension/clipboard@pasta.launcher/`). At start-up Linux picks one clipboard path (`clipboard_path()` in `src/platform/linux/mod.rs`): Wayland data-control when the compositor has it, the GNOME extension when it does not and `XDG_CURRENT_DESKTOP` contains `GNOME`, X11 without `WAYLAND_DISPLAY`. On the GNOME path the start-up clipboard read in `main()` is skipped, since the extension delivers the current clipboard itself.
+
+The extension pushes every clipboard change to Pasta (`com.pasta.Launcher` → `com.pasta.Launcher.Clipboard1.Offer(as) -> a{sh}`); Pasta answers with pipe write ends for the formats it wants, reads them (32 MiB cap, 5 s deadline per payload) and publishes a snapshot plus a change counter that the normal clipboard watcher consumes (`src/platform/linux/gnome_bridge.rs`). Writes go the other way through `com.pasta.Launcher.ShellBridge1.SetClipboard(s, h)` (`gnome_bridge_client.rs`). Pasta serves only `/usr/bin/gnome-shell`; the extension serves only an executable named `pasta-launcher` — a basename check, so any program named that, run as the user, passes it. If the service handler panics, Pasta records a capture-unavailable reason so the launcher banner reports it instead of failing silently.
+
+Things worth knowing before touching it:
+
+- **GNOME discovers extensions only when the shell starts.** After installing or upgrading, the user must log out and back in once before it can be enabled; until then `GetExtensionInfo` returns an empty dict and `EnableExtension` returns `false`. `gnome_extension_status.rs` turns this and every other state into the launcher banner. The install script prints this as an unconditional message (also on non-GNOME desktops).
+- **The banner shows whenever capture is unusable, regardless of history.** The empty-history notice is unchanged, so the same reason can appear twice when history is empty.
+- **The Enable button suppresses blur auto-hide while its D-Bus call is in flight**, so the launcher is not hidden by a focus loss while the request is pending. The call itself runs on a background thread.
+- **Every copy produces several clipboard events**: the real one, an empty one (dropped by the extension), and a replay from GNOME's memory when the source app exits. Replays are forwarded on purpose; storage dedup moves the item to the top instead of duplicating it.
+- **Pasta's own writes come back** as clipboard changes; the self-write check in `should_ignore_self_clipboard_write` stays active for its whole 5-second window for this reason.
+- **Never load the extension into your live session to test it** — an exception in GNOME Shell can end the whole Wayland session. Use `gnome-extension/tests/run-all.sh`, which runs a headless GNOME Shell with its own D-Bus session, XDG directories and in-memory settings. Quit any running Pasta first: the harness shares `XDG_RUNTIME_DIR` (gnome-shell will not start without it), so a live instance's single-instance lock would capture the test launch.
+- The measurements behind this design are in `docs/gnome-extension-spike-findings.md`.
+
 ## Single-instance guard + `--show` trigger
 
 Two cooperating pieces in `src/platform/linux/mod.rs`, wired from the Linux `main()`:

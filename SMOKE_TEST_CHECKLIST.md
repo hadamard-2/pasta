@@ -31,6 +31,18 @@ Current baseline:
 - On a desktop with no GlobalShortcuts portal, confirm stderr explains the fallback and that the evdev path still works for a user in the `input` group.
 - With neither available, confirm the tray icon and `pasta-launcher --show` still open the launcher.
 
+### GNOME clipboard extension (GNOME 50, live session)
+
+- Run `gnome-extension/tests/run-all.sh` first (quit Pasta before running it) and confirm four `PASS` lines.
+- On a fresh install, open the launcher and confirm the banner says to log out and back in; log out and in, confirm it now offers **Enable**; click it and confirm the banner disappears.
+- Copy text in a terminal and in a browser; confirm both appear in history.
+- Take a screenshot to the clipboard; confirm an image item appears.
+- Copy an image file in Nautilus; confirm the history item is the image, not its path.
+- Copy a password from KeePassXC; confirm it is stored as a masked secret.
+- Copy a text item and an image item back out of history and paste them into another app.
+- With secret auto-clear enabled, copy a secret from history and confirm the clipboard is empty about 30 seconds later.
+- Disable the extension in GNOME's Extensions app and confirm the banner returns with **Enable**.
+
 ### Tray
 
 - Confirm a tray/status icon appears in the host bar (`waybar`, KDE tray, or equivalent).

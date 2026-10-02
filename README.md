@@ -70,7 +70,7 @@ cd pasta
 
 ### Linux
 
-Wayland-first (tested on KDE Plasma and GNOME; requires a compositor that implements `ext-data-control-v1` or `wlr-data-control-v1`). X11 falls back through GPUI's X11 backend.
+Wayland-first. On KDE Plasma, Sway, Hyprland and other compositors that implement `ext-data-control-v1` or `wlr-data-control-v1`, Pasta reads the clipboard directly. On GNOME (tested on GNOME 50), whose compositor offers no such protocol, Pasta installs a small GNOME Shell extension, `clipboard@pasta.launcher`: after installing, log out and back in once, then click **Enable** in Pasta's launcher (or turn on "Pasta clipboard" in GNOME's Extensions app). X11 falls back through GPUI's X11 backend.
 
 **System dependencies** (Fedora / RHEL):
 

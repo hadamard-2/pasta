@@ -10,7 +10,7 @@ History document: records what a 2026-10 spike measured about feeding Pasta's cl
 
 ## Environment
 
-Ubuntu 26.04.1, GNOME Shell 50.1, gjs 1.88.0, rustc 1.95.0, session bus `dbus-daemon`. All scenarios ran in a headless nested shell (`spike/gnome-clipboard/nested-shell.sh`) with a private bus, display, XDG dirs and in-memory GSettings.
+Ubuntu 26.04.1, GNOME Shell 50.1, gjs 1.88.0, rustc 1.95.0, session bus `dbus-daemon`. All scenarios ran in a headless nested shell (`spike/gnome-clipboard/nested-shell.sh`, since deleted; its successor is `gnome-extension/tests/nested-shell.sh`) with a private bus, display, XDG dirs and in-memory GSettings.
 
 ## Results
 
