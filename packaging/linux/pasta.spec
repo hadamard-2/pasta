@@ -66,6 +66,10 @@ install -Dm0644 packaging/linux/%{bundle_id}.desktop \
     %{buildroot}%{_datadir}/applications/%{bundle_id}.desktop
 install -Dm0644 packaging/linux/%{bundle_id}.policy \
     %{buildroot}%{_datadir}/polkit-1/actions/%{bundle_id}.policy
+for f in metadata.json extension.js peer.js fd.js offer.js pasta-watch.js bridge.js; do
+    install -Dm0644 gnome-extension/clipboard@pasta.launcher/$f \
+        %{buildroot}%{_datadir}/gnome-shell/extensions/clipboard@pasta.launcher/$f
+done
 
 desktop-file-validate %{buildroot}%{_datadir}/applications/%{bundle_id}.desktop
 
@@ -76,6 +80,7 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/%{bundle_id}.desktop
 %{_datadir}/applications/%{bundle_id}.desktop
 %{_datadir}/icons/hicolor/512x512/apps/%{bundle_id}.png
 %{_datadir}/polkit-1/actions/%{bundle_id}.policy
+%{_datadir}/gnome-shell/extensions/clipboard@pasta.launcher/
 
 %changelog
 * Sat Apr 18 2026 Yafet Getachew <you@example.com> - 0.1.0-1

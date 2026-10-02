@@ -63,6 +63,12 @@ for size in "${ICON_SIZES[@]}"; do
 done
 remove_quiet "${POLKIT_USER_DIR}/${BUNDLE_ID}.policy"
 
+GNOME_EXT_DIR="${HOME}/.local/share/gnome-shell/extensions/clipboard@pasta.launcher"
+if [[ -d "${GNOME_EXT_DIR}" ]]; then
+  rm -rf "${GNOME_EXT_DIR}"
+  echo "Removed: ${GNOME_EXT_DIR}"
+fi
+
 # System polkit policy (requires sudo). Skip silently if not present.
 SYS_POLICY="${POLKIT_SYS_DIR}/${BUNDLE_ID}.policy"
 if [[ -f "${SYS_POLICY}" ]]; then

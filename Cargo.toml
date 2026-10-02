@@ -30,6 +30,13 @@ assets = [
     ["assets/pasta.png", "usr/share/icons/hicolor/512x512/apps/com.pasta.launcher.png", "644"],
     ["LICENSE", "usr/share/doc/pasta/LICENSE", "644"],
     ["README.md", "usr/share/doc/pasta/README.md", "644"],
+    ["gnome-extension/clipboard@pasta.launcher/metadata.json", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
+    ["gnome-extension/clipboard@pasta.launcher/extension.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
+    ["gnome-extension/clipboard@pasta.launcher/peer.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
+    ["gnome-extension/clipboard@pasta.launcher/fd.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
+    ["gnome-extension/clipboard@pasta.launcher/offer.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
+    ["gnome-extension/clipboard@pasta.launcher/pasta-watch.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
+    ["gnome-extension/clipboard@pasta.launcher/bridge.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
 ]
 
 # Dev builds: opt-level 1 gives ~5-10x faster runtime vs 0, with minimal compile-time cost.

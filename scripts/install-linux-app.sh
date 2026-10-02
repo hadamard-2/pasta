@@ -16,6 +16,9 @@ APPS_DIR="${HOME}/.local/share/applications"
 HICOLOR_ROOT="${HOME}/.local/share/icons/hicolor"
 POLKIT_USER_DIR="${HOME}/.local/share/polkit-1/actions"
 POLKIT_SYS_DIR="/usr/share/polkit-1/actions"
+GNOME_EXT_UUID="clipboard@pasta.launcher"
+GNOME_EXT_SRC="${ROOT_DIR}/gnome-extension/${GNOME_EXT_UUID}"
+GNOME_EXT_DIR="${HOME}/.local/share/gnome-shell/extensions/${GNOME_EXT_UUID}"
 
 POLICY_SRC="${ROOT_DIR}/packaging/linux/${BUNDLE_ID}.policy"
 ICON_SRC="${ROOT_DIR}/assets/pasta.png"
@@ -146,6 +149,22 @@ else
         || echo "note: pkaction could not verify the action — a logout/login may be required"
     fi
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# GNOME Shell extension — how Pasta sees the clipboard on GNOME, whose
+# compositor offers no clipboard protocol to background apps. Installed only;
+# enabling it is the user's choice (Pasta's launcher offers an Enable button).
+# ---------------------------------------------------------------------------
+if [[ -d "${GNOME_EXT_SRC}" ]]; then
+  rm -rf "${GNOME_EXT_DIR}"
+  mkdir -p "${GNOME_EXT_DIR}"
+  install -m 0644 "${GNOME_EXT_SRC}"/* "${GNOME_EXT_DIR}/"
+  echo "Installed GNOME extension: ${GNOME_EXT_DIR}"
+  echo ""
+  echo "Log out and back in, then click Enable in Pasta (or enable it in GNOME's Extensions app)."
+else
+  echo "warning: ${GNOME_EXT_SRC} not found; Pasta cannot capture the clipboard on GNOME" >&2
 fi
 
 echo ""
