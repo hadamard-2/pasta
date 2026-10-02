@@ -285,7 +285,6 @@ fn set_gnome_capture_notice(notice: Option<(String, Option<CaptureFixAction>)>) 
 }
 
 /// The one-click fix for the current notice, if it has one.
-#[allow(dead_code)] // used by the launcher banner (next commit)
 pub(crate) fn clipboard_capture_fix_action() -> Option<CaptureFixAction> {
     GNOME_CAPTURE_NOTICE
         .lock()
@@ -303,7 +302,6 @@ pub(crate) fn capture_fix_in_flight() -> bool {
 /// Runs a fix the user clicked. Off the UI thread: it is a D-Bus round trip
 /// to the shell, and the resulting state change arrives through the status
 /// watcher.
-#[allow(dead_code)] // used by the launcher banner (next commit)
 pub(crate) fn run_capture_fix_action(action: CaptureFixAction) {
     match action {
         CaptureFixAction::EnableGnomeExtension => {

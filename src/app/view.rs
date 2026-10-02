@@ -199,6 +199,19 @@ impl Render for LauncherView {
             .into_any_element()
         };
 
+        // Capture is down: say so above the results whether or not history is
+        // empty, so a normal-looking list doesn't hide that nothing new arrives.
+        let results = match clipboard_capture_unavailable_reason() {
+            Some(reason) => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(self.render_capture_notice(&reason, palette, cx))
+                .child(div().flex_1().min_h(px(0.0)).child(results))
+                .into_any_element(),
+            None => results,
+        };
+
         let mut panel = div()
             .size_full()
             .font_family(self.ui_font_family.clone())
@@ -2079,6 +2092,56 @@ impl LauncherView {
                     ),
             )
             .child(chips)
+            .into_any_element()
+    }
+
+    /// One-line notice above the results explaining why nothing new is being
+    /// captured, with its fix when there is one.
+    fn render_capture_notice(
+        &self,
+        reason: &str,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut notice = div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px(px(10.0))
+            .py(px(6.0))
+            .text_xs()
+            .text_color(palette.muted_text)
+            .child(div().flex_1().child(reason.to_owned()));
+        if let Some(action) = clipboard_capture_fix_action() {
+            notice = notice.child(Self::render_capture_fix_button(action, palette, cx));
+        }
+        notice.into_any_element()
+    }
+
+    fn render_capture_fix_button(
+        action: CaptureFixAction,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let label = match action {
+            CaptureFixAction::EnableGnomeExtension => "Enable",
+        };
+        div()
+            .id("capture-fix-action")
+            .text_xs()
+            .text_color(palette.keycap_text)
+            .bg(palette.keycap_bg)
+            .rounded(px(4.0))
+            .px(px(8.0))
+            .py(px(2.0))
+            .cursor_pointer()
+            .on_click(cx.listener(move |view, _event, _window, cx| {
+                view.suppress_auto_hide_until = Some(Instant::now() + Duration::from_millis(300));
+                run_capture_fix_action(action);
+                cx.notify();
+            }))
+            .child(label)
             .into_any_element()
     }
 
