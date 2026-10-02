@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use super::gnome_bridge_client::{MAX_PAYLOAD_BYTES, SHELL_EXE, is_shell_executable};
@@ -123,14 +123,15 @@ impl GnomeClipboardSnapshot {
 /// Latest snapshot plus a counter the clipboard watcher compares, mirroring
 /// the change counters of the other clipboard paths.
 pub(crate) struct SnapshotStore {
-    snapshot: Mutex<Option<GnomeClipboardSnapshot>>,
+    /// The published snapshot and the offer sequence it came from.
+    snapshot: Mutex<(Option<GnomeClipboardSnapshot>, u64)>,
     change_count: AtomicI64,
 }
 
 impl SnapshotStore {
     pub(crate) const fn new() -> Self {
         Self {
-            snapshot: Mutex::new(None),
+            snapshot: Mutex::new((None, 0)),
             change_count: AtomicI64::new(0),
         }
     }
@@ -139,6 +140,7 @@ impl SnapshotStore {
         self.snapshot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .0
             .clone()
     }
 
@@ -146,16 +148,28 @@ impl SnapshotStore {
         self.change_count.load(Ordering::Acquire)
     }
 
-    fn publish(&self, snapshot: GnomeClipboardSnapshot) {
-        *self
+    /// Publishes the snapshot of offer `sequence`, unless a newer offer has
+    /// already been published. Offers are read on separate threads, so a slow
+    /// older one can finish after a newer one; it must not become current.
+    /// Returns whether the snapshot was published.
+    fn publish(&self, sequence: u64, snapshot: GnomeClipboardSnapshot) -> bool {
+        let mut current = self
             .snapshot
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(snapshot);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if sequence <= current.1 {
+            return false;
+        }
+        *current = (Some(snapshot), sequence);
         self.change_count.fetch_add(1, Ordering::AcqRel);
+        true
     }
 }
 
 pub(crate) static STORE: SnapshotStore = SnapshotStore::new();
+
+/// Orders offers as they arrive; the first offer gets 1.
+static OFFER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Reason shown when Pasta's own clipboard service code panicked.
 const SERVICE_PANIC_REASON: &str = "Pasta's clipboard service hit an internal error, so this copy was not captured. Restart Pasta if copies stop appearing.";
@@ -177,12 +191,12 @@ fn guard_service_panic<T>(report: impl FnOnce(String), work: impl FnOnce() -> T)
 
 /// Reads every wanted payload of one offer on its own thread, then publishes
 /// the snapshot once all of them have finished or been given up on.
-fn collect_offer(mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
+fn collect_offer(sequence: u64, mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
     let spawned = std::thread::Builder::new()
         .name("pasta-gnome-offer".to_owned())
         .spawn(move || {
             guard_service_panic(super::set_clipboard_capture_blocked, || {
-                read_and_publish(mimetypes, readers)
+                read_and_publish(sequence, mimetypes, readers)
             });
         });
     if let Err(err) = spawned {
@@ -190,7 +204,7 @@ fn collect_offer(mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
     }
 }
 
-fn read_and_publish(mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
+fn read_and_publish(sequence: u64, mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
     let mut payloads = HashMap::new();
     for (mime, fd) in readers {
         match read_payload(fd, MAX_PAYLOAD_BYTES, PAYLOAD_DEADLINE) {
@@ -207,14 +221,23 @@ fn read_and_publish(mimetypes: Vec<String>, readers: Vec<(String, OwnedFd)>) {
         .map(|(mime, bytes)| format!("{mime}={}", bytes.len()))
         .collect();
     summary.sort();
-    eprintln!(
-        "info: GNOME clipboard snapshot published: mimetypes={mimetypes:?} payloads=[{}]",
-        summary.join(", ")
-    );
-    STORE.publish(GnomeClipboardSnapshot {
-        mimetypes,
-        payloads,
-    });
+    let summary = summary.join(", ");
+    let logged_mimetypes = format!("{mimetypes:?}");
+    if STORE.publish(
+        sequence,
+        GnomeClipboardSnapshot {
+            mimetypes,
+            payloads,
+        },
+    ) {
+        eprintln!(
+            "info: GNOME clipboard snapshot published: mimetypes={logged_mimetypes} payloads=[{summary}]"
+        );
+    } else {
+        eprintln!(
+            "info: GNOME clipboard snapshot dropped, a newer copy was already published: mimetypes={logged_mimetypes} payloads=[{summary}]"
+        );
+    }
 }
 
 async fn executable_of(
@@ -272,6 +295,7 @@ impl ClipboardService {
 fn answer_offer(
     mimetypes: Vec<String>,
 ) -> zbus::fdo::Result<HashMap<String, zbus::zvariant::OwnedFd>> {
+    let sequence = OFFER_SEQUENCE.fetch_add(1, Ordering::AcqRel);
     let mut writers = HashMap::new();
     let mut readers = Vec::new();
     for mime in select_wanted_mimes(&mimetypes) {
@@ -280,7 +304,7 @@ fn answer_offer(
         readers.push((mime.clone(), OwnedFd::from(reader)));
         writers.insert(mime, OwnedFd::from(writer).into());
     }
-    collect_offer(mimetypes, readers);
+    collect_offer(sequence, mimetypes, readers);
     Ok(writers)
 }
 
@@ -450,12 +474,24 @@ mod tests {
         let store = SnapshotStore::new();
         assert_eq!(store.change_count(), 0);
         assert_eq!(store.snapshot(), None);
-        store.publish(snapshot(&["text/plain"], &[("text/plain", b"a")]));
-        store.publish(snapshot(&["text/plain"], &[("text/plain", b"b")]));
+        assert!(store.publish(1, snapshot(&["text/plain"], &[("text/plain", b"a")])));
+        assert!(store.publish(2, snapshot(&["text/plain"], &[("text/plain", b"b")])));
         assert_eq!(store.change_count(), 2);
         assert_eq!(
             store.snapshot().and_then(|s| s.text()).as_deref(),
             Some("b")
+        );
+    }
+
+    #[test]
+    fn an_older_offer_finishing_late_does_not_replace_a_newer_one() {
+        let store = SnapshotStore::new();
+        assert!(store.publish(2, snapshot(&["text/plain"], &[("text/plain", b"new")])));
+        assert!(!store.publish(1, snapshot(&["text/plain"], &[("text/plain", b"old")])));
+        assert_eq!(store.change_count(), 1);
+        assert_eq!(
+            store.snapshot().and_then(|s| s.text()).as_deref(),
+            Some("new")
         );
     }
 }
