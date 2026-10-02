@@ -51,10 +51,52 @@ def set_file(mimetype, path):
         Gdk.ContentProvider.new_for_bytes(mimetype, GLib.Bytes.new(data))))
 
 
+IMPOSTORS = {
+    "pasta": (
+        "com.pasta.Launcher",
+        "/com/pasta/Launcher/Clipboard",
+        '<node><interface name="com.pasta.Launcher.Clipboard1">'
+        '<method name="Offer"><arg type="as" direction="in"/><arg type="a{sh}" direction="out"/></method>'
+        "</interface></node>",
+    ),
+    "bridge": (
+        "com.pasta.Launcher.ShellBridge",
+        "/com/pasta/Launcher/ShellBridge",
+        '<node><interface name="com.pasta.Launcher.ShellBridge1">'
+        '<method name="SetClipboard"><arg type="s" direction="in"/><arg type="h" direction="in"/></method>'
+        "</interface></node>",
+    ),
+}
+
+
+def impostor(kind, seconds):
+    """Own a name the real peers trust, answer every call, and report it."""
+    name, path, xml = IMPOSTORS[kind]
+    interface = Gio.DBusNodeInfo.new_for_xml(xml).interfaces[0]
+    loop = GLib.MainLoop()
+
+    def on_call(_conn, _sender, _path, _iface, method, _params, invocation):
+        print(f"IMPOSTOR got {method}", flush=True)
+        if method == "Offer":
+            invocation.return_value(GLib.Variant("(a{sh})", ({},)))
+        else:
+            invocation.return_value(None)
+
+    def on_bus(connection, _name):
+        connection.register_object(path, interface, on_call, None, None)
+
+    Gio.bus_own_name(
+        Gio.BusType.SESSION, name, Gio.BusNameOwnerFlags.NONE,
+        on_bus, lambda *_: print(f"IMPOSTOR owns {name}", flush=True), None)
+    GLib.timeout_add_seconds(int(seconds), loop.quit)
+    loop.run()
+
+
 COMMANDS = {
     "set-text": set_text,
     "make-png": make_png,
     "set-file": set_file,
+    "impostor": impostor,
 }
 
 if __name__ == "__main__":
