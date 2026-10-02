@@ -28,7 +28,7 @@ PASTA-SPIKE owner-changed source=null mimetypes=[]
 PASTA-SPIKE owner-changed source=[object instance wrapper GIName:Meta.SelectionSourceMemory ...] mimetypes=["text/plain;charset=utf-8"]
 ```
 
-The first event is the real copy, with a Wayland source and both text mimetypes. The second has a null source and an empty mimetype list, which follows the source app exiting (the clipboard became ownerless). The third has a memory source with a single mimetype, which is the shell's own in-memory replay of the content after the owner vanished (inferred from the source type; not separately confirmed). Events with empty mimetypes or a memory source should not be treated as new user copies.
+The first event is the real copy, with a Wayland source and both text mimetypes. The second has a null source and an empty mimetype list, which appears right after the source app exits (the event order is measured; that the exit causes it is inferred). The third has a memory source with a single mimetype, which is the shell's own in-memory replay of the content after the owner vanished (inferred from the source type; not separately confirmed).
 
 ### Large payloads (question 1)
 
@@ -40,7 +40,7 @@ Measured by `scenario-offer.sh` in the nested shell; the extension offers on eac
 | image/png (about 3 MB) | 3173432 | 21 ms | 22.4 ms | 2 |
 | image/png (about 15 MB, incompressible) | 15556313 | 50 ms | 50.7 ms | 1 |
 
-The Xwayland baseline measured earlier via `xclip` was 3.2 MB in about 40 ms and 15.6 MB in about 145 ms, so the pipe path is faster (about 2x to 3x) and the shell side adds under 2 ms of overhead on top of Pasta's own read time.
+The Xwayland baseline measured earlier via `xclip` was 3.2 MB in about 40 ms and 15.6 MB in about 145 ms, so the pipe path looked faster (about 2x to 3x) and the shell side added under 2 ms on top of Pasta's own read time. This comparison is indicative only: the two paths differ and each figure is from a single run. The second 3 MB delivery in each set was faster than the first (14 ms at Pasta and 14.9 ms in the extension in the Task 3 run; 9 ms at Pasta and 10.6 ms in the extension in the final regression run).
 
 Each text and 3 MB set produced two `owner-changed` events and so two `RECEIVED` lines: first a `MetaSelectionSourceWayland` source (the real owner), then a `Meta.SelectionSourceMemory` source with the same mimetypes, followed by a `source=null` event with an empty mimetype list in between. The memory-source event is a replay by the clipboard manager re-owning the selection (inferred, not traced to its origin), so the real implementation needs deduplication by content hash or by source type. The 15 MB set showed only the Wayland-source event before the scenario ended (the replay may simply not have arrived yet, inferred).
 
@@ -60,10 +60,28 @@ Both directions show executable-based gating, but with different scopes and enfo
 
 `scenario-write.sh` (Task 5) writes text (16 bytes) and a 3173374-byte PNG through `SetClipboard`: Pasta logs `WROTE` and the shell logs `SetClipboard` with the same 12-hex hash as the source file, and the resulting `owner-changed` makes the extension offer the bytes straight back, so Pasta logs `RECEIVED` with the identical hash (text 0 ms, PNG 14 ms for the echo read).
 
-The shell-side timestamps put the text write and the PNG write plus its echo within about 60 ms of each other end to end (about 3 MB image; not separately timed, so treat as an upper bound on one write).
+The log lines carry no timestamps for the write path, so no end-to-end write latency was measured; the only timings are the echo reads above.
 
 The echo means a write by Pasta is indistinguishable from a user copy at the Offer layer; the real implementation needs its own loop suppression (inference: for example by remembering the hash it just wrote).
 
 ## Implications for the real implementation
 
+Facts are in Results; items marked hypothesis or inferred were not confirmed by a scenario. The go/no-go decision is the maintainer's.
+
+- **Replays and empty events.** One copy produced two `RECEIVED` lines for text and 3 MB payloads (a Wayland-source event, then a `source=null`, empty-mimetype event, then a `Meta.SelectionSourceMemory` replay). Hypothesis: events with empty mimetypes or a memory source are not new user copies. Option A: drop empty-mimetype events in the extension and rely on Pasta's existing content dedup for the replay; costs a duplicate payload transfer per copy, and relies on dedup being hash-based. Option B: also filter by source type (skip memory sources) in the extension; saves the transfer, but it assumes a memory source never carries a genuine user copy, which was not tested (for example a clipboard manager re-owning content, or a copy made by the shell itself).
+- **Payload reader deadline.** In the final run every `Offer` that carried a payload was followed by a `RECEIVED`, except the last Offer line printed by the scenario, which the scenario ended on before its read was logged (timing of scenario end; not a stall observed). The 15 MB set showed one `RECEIVED` against the two seen for smaller sets. No stalled writer was tested, so whether a deadline is needed is unmeasured; a source app that never closes its pipe would hold the read open (inferred).
+- **Install and upgrade.** After installing or upgrading the extension the user must log out and back in before enabling works. While the shell has not discovered it, `GetExtensionInfo` returns an empty dict and `EnableExtension` returns `false`, so an "Enable" button should say "Log out and back in to finish installing" in that state rather than reporting a failure.
+- **Limits of executable-name verification.** Pasta accepts only a caller whose `/proc/<pid>/exe` is exactly `/usr/bin/gnome-shell`; this holds against busctl and python, but the hard-coded path does not fit layouts such as NixOS store paths. The shell side accepts any process named `pasta-launcher`, so a same-user copy of any binary under that name passes; this stops accidental callers, not a hostile same-user process.
+- **Formats.** The plan-level change: Pasta chooses which formats it wants (it returns writers only for the mimetypes it wants from `Offer`), not the extension. Pasta must still receive the mimetype list for each event.
+- **Selection read timing.** `transfer_async` reads the selection when the transfer runs, not as of the `owner-changed` event. The async gap (name and pid lookup plus the `Offer` call) can therefore stream newer content under an earlier event's mimetype list.
+- **Write-back echo.** Content Pasta writes comes back through `Offer`, so the real implementation needs loop suppression (for example remembering the hash it just wrote; inferred).
+- **Extension fd hygiene.** Close stolen fds that are unused, validate handle indexes, and cap the size of the bridge's `readAll`; the spike does none of these.
+- **Extension lifecycle.** `extension.js` should construct the bridge before connecting `owner-changed`, or guard `disable()` against a missing bridge.
+
 ## Open items
+
+- Behaviour in the live session with real apps (Nautilus, KeePassXC, a screenshot tool) is untested, because the spike never loads the extension into the live shell. Source types and event counts there may differ from the nested shell's single test client.
+- Secrets handling: whether password managers mark their copies with a hint mimetype and whether the extension sees it was not examined.
+- Payloads above 15 MB, a source that stalls mid-transfer, and many rapid copies were not tested.
+- Packaging and the real extension UUID are undecided; the spike UUID is deliberately temporary.
+- Non-GNOME-50 shells, non-Debian executable layouts and Xwayland-only source apps were not tested.
