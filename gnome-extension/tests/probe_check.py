@@ -6,7 +6,7 @@ Usage:
   probe_check.py wait nudged <pid> <timeout> <count printed before>
   probe_check.py counts <pid>
   probe_check.py ever-listed <pid>
-  probe_check.py dash-to-dock-lacks <pid>
+  probe_check.py dash-to-dock-lacks <pid> <other pid>
 """
 import json
 import sys
@@ -107,7 +107,7 @@ def main(argv):
         print("yes" if str(int(args[0])) in report()["everListed"] else "no", flush=True)
         return 0
     if command == "dash-to-dock-lacks":
-        pid = int(args[0])
+        pid, other_pid = int(args[0]), int(args[1])
         data = report()
         dock = data.get("dashToDock")
         if dock is None:
@@ -116,6 +116,11 @@ def main(argv):
         if dock == "unmapped":
             print("SKIP Dash to Dock's dash is not mapped in the headless shell", flush=True)
             return 0
+        # Proves the dock was actually read: the unrelated window's app must be listed.
+        other_ids = {w["appId"] for w in windows_of(data, other_pid) if w["appId"]}
+        if not other_ids & set(dock):
+            print(f"FAIL Dash to Dock lists none of {other_ids}: {dock}", flush=True)
+            return 1
         app_ids = {w["appId"] for w in windows_of(data, pid) if w["appId"]}
         if app_ids & set(dock):
             print(f"FAIL Dash to Dock still shows {app_ids & set(dock)}: {dock}", flush=True)

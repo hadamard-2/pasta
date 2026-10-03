@@ -29,8 +29,8 @@ $CHECK wait shown "$OTHER_PID" 5
 echo "OBSERVED pasta listed in running apps before it was hidden: $($CHECK ever-listed "$PASTA_PID")"
 
 # 5: the third-party dock, when this machine has it.
-echo "DASH-TO-DOCK $($CHECK dash-to-dock-lacks "$PASTA_PID")"
-$CHECK dash-to-dock-lacks "$PASTA_PID" >/dev/null
+echo "DASH-TO-DOCK $($CHECK dash-to-dock-lacks "$PASTA_PID" "$OTHER_PID")"
+$CHECK dash-to-dock-lacks "$PASTA_PID" "$OTHER_PID" >/dev/null
 
 # 4: disabling restores Pasta and nudges the lists to redraw.
 before=$($CHECK counts "$PASTA_PID")
