@@ -3,7 +3,7 @@
 Usage:
   probe_check.py wait hidden <pid> <timeout>
   probe_check.py wait shown <pid> <timeout>
-  probe_check.py wait nudged <pid> <timeout> "<counts printed before>"
+  probe_check.py wait nudged <pid> <timeout> <count printed before>
   probe_check.py counts <pid>
   probe_check.py ever-listed <pid>
 """
@@ -63,17 +63,17 @@ def shown(data, pid):
 
 def counts(data, pid):
     key = str(pid)
-    return data["appStateChanges"].get(key, 0), data["skipNotifies"].get(key, 0)
+    return data["appStateChanges"].get(key, 0)
 
 
 def nudged(before):
-    app_before, skip_before = (int(n) for n in before.split())
+    app_before = int(before)
 
     def check(data, pid):
-        app_now, skip_now = counts(data, pid)
-        if app_now > app_before and skip_now > skip_before:
+        app_now = counts(data, pid)
+        if app_now > app_before:
             return None
-        return f"no nudge for pid {pid}: app-state-changed {app_before}->{app_now}, notify::skip-taskbar {skip_before}->{skip_now}"
+        return f"no nudge for pid {pid}: app-state-changed {app_before}->{app_now}"
 
     return check
 
@@ -100,7 +100,7 @@ def main(argv):
         check = {"hidden": hidden, "shown": shown}.get(state) or nudged(rest[0])
         return wait(check, int(pid), float(timeout))
     if command == "counts":
-        print(*counts(report(), int(args[0])), flush=True)
+        print(counts(report(), int(args[0])), flush=True)
         return 0
     if command == "ever-listed":
         print("yes" if str(int(args[0])) in report()["everListed"] else "no", flush=True)

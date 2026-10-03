@@ -5,6 +5,10 @@ set -eu
 . "$HERE/lib.sh"
 CHECK="python3 $HERE/probe_check.py"
 enable_probe
+# Disabling an extension cycles every extension enabled after it, so put the
+# probe ahead of the clipboard extension or its counters reset mid-check.
+busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell.Extensions DisableExtension s "$UUID" >/dev/null
+busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell.Extensions EnableExtension s "$UUID" >/dev/null
 
 # An unrelated window that must stay listed throughout.
 python3 "$HERE/clip_tool.py" window 120 >"$NEST/window.log" 2>&1 &
