@@ -43,6 +43,14 @@ Current baseline:
 - With secret auto-clear enabled, copy a secret from history and confirm the clipboard is empty about 30 seconds later.
 - Disable the extension in GNOME's Extensions app and confirm the banner returns with **Enable**.
 
+### GNOME (Wayland)
+
+- With the Pasta extension enabled, open the launcher: Pasta has no dock icon (GNOME dash, Ubuntu Dock or Dash to Dock).
+- Press Alt+Tab and Super+` while the launcher is open: Pasta appears in neither switcher.
+- Open the Activities overview while the launcher or the About window is open: no Pasta window thumbnail.
+- Copy some text: it still shows up in Pasta's history.
+- Turn the extension off in GNOME's Extensions app: Pasta's dock icon comes back without restarting Pasta; turn it on again and the icon goes away.
+
 ### Tray
 
 - Confirm a tray/status icon appears in the host bar (`waybar`, KDE tray, or equivalent).

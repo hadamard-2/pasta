@@ -66,7 +66,7 @@ install -Dm0644 packaging/linux/%{bundle_id}.desktop \
     %{buildroot}%{_datadir}/applications/%{bundle_id}.desktop
 install -Dm0644 packaging/linux/%{bundle_id}.policy \
     %{buildroot}%{_datadir}/polkit-1/actions/%{bundle_id}.policy
-for f in metadata.json extension.js peer.js fd.js offer.js pasta-watch.js bridge.js; do
+for f in metadata.json extension.js peer.js fd.js offer.js pasta-watch.js bridge.js hide.js; do
     install -Dm0644 gnome-extension/clipboard@pasta.launcher/$f \
         %{buildroot}%{_datadir}/gnome-shell/extensions/clipboard@pasta.launcher/$f
 done

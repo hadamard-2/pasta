@@ -19,10 +19,14 @@ function callBus(method, args, replyType) {
     });
 }
 
+/** Process ID of the connection that owns `busName` (unique or well-known). */
+export function pidOf(busName) {
+    return callBus('GetConnectionUnixProcessID', new GLib.Variant('(s)', [busName]), '(u)');
+}
+
 /** Absolute executable path of the process that owns `busName` (unique or well-known). */
 export async function executableOf(busName) {
-    const pid = await callBus('GetConnectionUnixProcessID', new GLib.Variant('(s)', [busName]), '(u)');
-    return GLib.file_read_link(`/proc/${pid}/exe`);
+    return GLib.file_read_link(`/proc/${await pidOf(busName)}/exe`);
 }
 
 /** Current unique owner of a well-known name and that owner's executable. */

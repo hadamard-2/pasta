@@ -29,7 +29,7 @@ Everything is best-effort: any failure returns and leaves GPUI's default behavio
 
 ## Staying out of the dock
 
-`NSApplicationActivationPolicyAccessory` keeps Pasta out of the Dock on macOS, and there is no Linux equivalent — nothing about being a tray app stops a window from being listed. GPUI creates the launcher as a plain window with no `_NET_WM_WINDOW_TYPE`, so window managers treat it as `_NET_WM_WINDOW_TYPE_NORMAL` and list it as a running app; on GNOME that means a dock entry, with a *generic* icon because the launcher also carries no `WM_CLASS`. `set_skip_taskbar_and_pager` fixes this by setting `_NET_WM_STATE_SKIP_TASKBAR` and `_NET_WM_STATE_SKIP_PAGER`, piggybacking on the same window lookup as the centering fix.
+`NSApplicationActivationPolicyAccessory` keeps Pasta out of the Dock on macOS, and there is no Linux equivalent — nothing about being a tray app stops a window from being listed. GPUI creates the launcher as a plain window with no `_NET_WM_WINDOW_TYPE`, so window managers treat it as `_NET_WM_WINDOW_TYPE_NORMAL` and list it as a running app; on GNOME that means a dock entry, with a *generic* icon because the launcher also carries no `WM_CLASS`. `set_skip_taskbar_and_pager` fixes this by setting `_NET_WM_STATE_SKIP_TASKBAR` and `_NET_WM_STATE_SKIP_PAGER`, piggybacking on the same window lookup as the centering fix. That covers X11 only: on GNOME Wayland the window state is not ours to set, and the GNOME extension hides Pasta instead, see "Staying out of the dock on GNOME Wayland" below.
 
 Two things worth knowing before you touch it:
 
@@ -105,6 +105,22 @@ Things worth knowing before touching it:
 - **Pasta's own writes come back** as clipboard changes; the self-write check in `should_ignore_self_clipboard_write` stays active for its whole 5-second window for this reason.
 - **Never load the extension into your live session to test it** — an exception in GNOME Shell can end the whole Wayland session. Use `gnome-extension/tests/run-all.sh`, which runs a headless GNOME Shell with its own D-Bus session, XDG directories and in-memory settings. Quit any running Pasta first: the harness shares `XDG_RUNTIME_DIR` (gnome-shell will not start without it), so a live instance's single-instance lock would capture the test launch.
 - The measurements behind this design are in `docs/gnome-extension-spike-findings.md`.
+
+### Staying out of the dock on GNOME Wayland
+
+Status legend: **verified** means observed in the nested GNOME Shell 50.1 harness or read from the installed shell JS; **inferred** means reasoned from that evidence but not confirmed.
+
+GNOME Shell has two separate sources of "what is running" (verified by reading the installed 50.1 JS). App lists (`ui/dash.js`, Ubuntu Dock, Dash to Dock, the Alt+Tab app switcher) come from `Shell.AppSystem.get_running()`, which is computed in C. Window lists (`ui/workspace.js`, `ui/workspaceThumbnail.js`, the Alt+Tab window switcher) read `skip_taskbar`. The extension's `hide.js` overrides both, for the verified Pasta PID only.
+
+Overriding `skip_taskbar` on `Meta.Window.prototype` alone had no effect (verified in the harness): GJS resolves the accessor onto the concrete class prototype (`MetaWindowWayland`), so `hide.js` forces resolution first and patches wherever it lands.
+
+The redraw nudge is `app-state-changed` only. Emitting `notify::skip-taskbar` was tried and made the nested gnome-shell die when Pasta exited (verified by elimination: removing only that emit made the shell survive). The cause is inferred, not verified: the shell's own per-app window accounting treats the notify as a real change and drifts. Consequence (inferred): an overview that is already open when the hidden state changes does not update until it is reopened. The scenario proves the `app-state-changed` emission; how each dock reacts to it is read from source, not observed.
+
+In the nested shell, Pasta was listed in the running apps before the extension hid it (verified: `OBSERVED pasta listed in running apps before it was hidden: yes`), so the hiding is doing real work. Whether Pasta is briefly listed between its first window appearing and the extension noticing it (the start-up gap) was not observed or measured.
+
+Dash to Dock was checked for real in the nested shell, not skipped: Pasta is absent from its app list while an unrelated app's window is listed (verified, `DASH-TO-DOCK PASS`). That check fails on an empty list, so it cannot pass vacuously.
+
+Disabling the extension restores Pasta everywhere without restarting Pasta (verified in the scenario). In GNOME 50.1, disabling an extension first disables every extension enabled after it and re-enables them afterwards (verified in `extensionSystem.js`, `_callExtensionDisable`), which is why the scenario enables the probe before `clipboard@pasta.launcher`. The X11 path (`set_skip_taskbar_and_pager`) is unchanged.
 
 ## Single-instance guard + `--show` trigger
 

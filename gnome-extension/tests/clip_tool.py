@@ -145,6 +145,28 @@ def poke_bridge():
         print(f"POKE rejected: {error.message}", flush=True)
 
 
+def window(seconds):
+    """Show a plain window for `seconds`; prints WINDOW shown once it is presented."""
+
+    def activate(app):
+        win = Gtk.ApplicationWindow(application=app)
+        win.present()
+        print("WINDOW shown", flush=True)
+        GLib.timeout_add_seconds(int(seconds), lambda: (app.quit(), False)[1])
+
+    app = Gtk.Application(application_id="dev.pasta.GnomeTestWindow", flags=Gio.ApplicationFlags.NON_UNIQUE)
+    app.connect("activate", activate)
+    app.run(None)
+
+
+def impostor_window(seconds):
+    """Own com.pasta.Launcher without being pasta-launcher, and show a window."""
+    Gio.bus_own_name(
+        Gio.BusType.SESSION, "com.pasta.Launcher", Gio.BusNameOwnerFlags.NONE,
+        None, lambda *_: print("IMPOSTOR owns com.pasta.Launcher", flush=True), None)
+    window(seconds)
+
+
 COMMANDS = {
     "set-text": set_text,
     "get-text": get_text,
@@ -153,6 +175,8 @@ COMMANDS = {
     "make-png": make_png,
     "impostor": impostor,
     "poke-bridge": poke_bridge,
+    "window": window,
+    "impostor-window": impostor_window,
 }
 
 if __name__ == "__main__":

@@ -37,3 +37,17 @@ write_as_pasta() {
     cp "$REPO_ROOT/target/debug/examples/gnome_bridge_write" "$NEST/writer/pasta-launcher"
     "$NEST/writer/pasta-launcher" "$1" "$2"
 }
+
+# enable_probe: turn on the test-only probe extension and wait until it answers.
+enable_probe() {
+    enabled=$(busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell.Extensions EnableExtension s probe@pasta.launcher)
+    [ "$enabled" = "b true" ] || { echo "FAIL enabling the probe returned: $enabled"; return 1; }
+    for _ in $(seq 1 40); do
+        if busctl --user call com.pasta.TestProbe /com/pasta/TestProbe com.pasta.TestProbe1 Report >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    echo "FAIL the probe never answered on com.pasta.TestProbe"
+    return 1
+}

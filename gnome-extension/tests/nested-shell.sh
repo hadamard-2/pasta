@@ -22,6 +22,15 @@ mkdir -p "$NEST/config" "$NEST/cache" "$NEST/state" "$NEST/writer" "$NEST/data/g
 # GNOME Shell discovers extensions only at start-up.
 rm -rf "$NEST/data/gnome-shell/extensions/$UUID"
 cp -r "$REPO_ROOT/gnome-extension/$UUID" "$NEST/data/gnome-shell/extensions/"
+# Test-only probe; scenarios that need it enable it themselves.
+rm -rf "$NEST/data/gnome-shell/extensions/probe@pasta.launcher"
+cp -r "$HERE/probe@pasta.launcher" "$NEST/data/gnome-shell/extensions/"
+# Third-party dock, used only if this machine has it; scenario-hide skips the check otherwise.
+DTD=dash-to-dock@micxgx.gmail.com
+if [ -d "$HOME/.local/share/gnome-shell/extensions/$DTD" ]; then
+    rm -rf "$NEST/data/gnome-shell/extensions/$DTD"
+    cp -r "$HOME/.local/share/gnome-shell/extensions/$DTD" "$NEST/data/gnome-shell/extensions/"
+fi
 export XDG_CONFIG_HOME="$NEST/config" XDG_DATA_HOME="$NEST/data" \
     XDG_CACHE_HOME="$NEST/cache" XDG_STATE_HOME="$NEST/state" \
     GSETTINGS_BACKEND=memory NEST HERE REPO_ROOT UUID
