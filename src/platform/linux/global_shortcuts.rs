@@ -62,7 +62,7 @@ const SHOW_LAUNCHER_DESCRIPTION: &str = "Show the Pasta clipboard launcher";
 /// keysym names minus the `XKB_KEY_` prefix. Only a *preference* — the
 /// compositor may hand us something else (or let the user rebind it later),
 /// which is why the granted trigger is read back from the response.
-const PREFERRED_TRIGGER: &str = "LOGO+space";
+const PREFERRED_TRIGGER: &str = "LOGO+v";
 
 /// `org.freedesktop.portal.Request::Response` codes.
 const RESPONSE_SUCCESS: u32 = 0;
@@ -543,7 +543,7 @@ mod tests {
             .rsplit_once('+')
             .expect("trigger has a modifier");
         assert_eq!(modifiers, "LOGO");
-        assert_eq!(key, "space");
+        assert_eq!(key, "v");
     }
 
     #[test]

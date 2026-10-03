@@ -586,7 +586,7 @@ fn run_evdev_hotkey_listener(menu_tx: &mpsc::Sender<MenuCommand>) {
                                 continue;
                             }
 
-                            if key == Key::KEY_SPACE && is_press && meta_pressed {
+                            if key == Key::KEY_V && is_press && meta_pressed {
                                 let _ = menu_tx.send(MenuCommand::ShowLauncher);
                             }
                         }

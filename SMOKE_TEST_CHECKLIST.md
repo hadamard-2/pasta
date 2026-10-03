@@ -18,14 +18,14 @@ Current baseline:
 
 ### Launcher
 
-- Press `Meta + Space` to show the launcher.
+- Press `Meta + V` to show the launcher.
 - Press `Escape` to hide it.
-- Press `Meta + Space` again repeatedly to ensure show/hide does not get stuck.
-- Confirm the launcher can both open and hide via `Meta + Space` without getting stuck in an intermediate transition.
+- Press `Meta + V` again repeatedly to ensure show/hide does not get stuck.
+- Confirm the launcher can both open and hide via `Meta + V` without getting stuck in an intermediate transition.
 
 ### Global shortcut registration (Linux)
 
-- On the first launch after a fresh install, confirm the desktop's permission dialog appears and that approving it makes `Meta + Space` work.
+- On the first launch after a fresh install, confirm the desktop's permission dialog appears and that approving it makes `Meta + V` work.
 - Restart Pasta and confirm the shortcut still works **without** a second dialog, and that stderr carries one `pasta: global shortcut registered with the desktop portal (…)` line naming the granted trigger.
 - Confirm only one launcher opens per keypress — two listeners running at once would open it twice.
 - On a desktop with no GlobalShortcuts portal, confirm stderr explains the fallback and that the evdev path still works for a user in the `input` group.
