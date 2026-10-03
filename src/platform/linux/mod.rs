@@ -1293,17 +1293,6 @@ impl Tray for PastaTray {
             .into(),
         );
 
-        items.push(
-            StandardItem {
-                label: "Clear Clipboard History…".into(),
-                activate: Box::new(|tray: &mut Self| {
-                    let _ = tray.menu_tx.send(MenuCommand::RequestClearHistory);
-                }),
-                ..Default::default()
-            }
-            .into(),
-        );
-
         items.push(MenuItem::Separator);
         items.push(
             StandardItem {

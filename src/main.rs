@@ -195,6 +195,9 @@ pub(crate) enum MenuCommand {
     SetPastaBrain(bool),
     DownloadBrain,
     NeuralStatusChanged,
+    // No menu entry sends this any more; the clear-history flow is kept so it
+    // can be re-exposed later.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     RequestClearHistory,
     PerformClearHistory,
     ToggleLaunchAtLogin,
