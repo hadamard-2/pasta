@@ -5,7 +5,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 cargo build --manifest-path "$HERE/../../Cargo.toml" --bin pasta-launcher --example gnome_bridge_write || exit 1
 failed=0
-for scenario in capture startup write refusals; do
+for scenario in capture startup write refusals hide; do
     if "$HERE/nested-shell.sh" "$HERE/scenario-$scenario.sh"; then
         :
     else

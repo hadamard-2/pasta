@@ -37,6 +37,7 @@ assets = [
     ["gnome-extension/clipboard@pasta.launcher/offer.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
     ["gnome-extension/clipboard@pasta.launcher/pasta-watch.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
     ["gnome-extension/clipboard@pasta.launcher/bridge.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
+    ["gnome-extension/clipboard@pasta.launcher/hide.js", "usr/share/gnome-shell/extensions/clipboard@pasta.launcher/", "644"],
 ]
 
 # Dev builds: opt-level 1 gives ~5-10x faster runtime vs 0, with minimal compile-time cost.

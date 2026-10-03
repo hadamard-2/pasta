@@ -4,6 +4,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {ShellBridge} from './bridge.js';
 import {offerToPasta} from './offer.js';
 import {PastaWatch} from './pasta-watch.js';
+import {PastaHider} from './hide.js';
 
 export default class PastaClipboardExtension extends Extension {
     enable() {
@@ -23,9 +24,19 @@ export default class PastaClipboardExtension extends Extension {
                 .catch(e => console.warn(`pasta-clipboard: offer failed: ${e.message}`));
         });
         this._pastaWatch = new PastaWatch(this._selection);
+        // Hiding Pasta's windows is independent of the clipboard: if it cannot
+        // start, capture keeps working and Pasta simply stays visible.
+        try {
+            this._hider = new PastaHider();
+        } catch (e) {
+            console.warn(`pasta-clipboard: not hiding Pasta: ${e.message}`);
+            this._hider = null;
+        }
     }
 
     disable() {
+        this._hider?.destroy();
+        this._hider = null;
         this._pastaWatch?.destroy();
         this._pastaWatch = null;
         if (this._ownerChangedId) {
