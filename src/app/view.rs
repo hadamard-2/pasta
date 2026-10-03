@@ -11,6 +11,10 @@ use gpui::{AnyElement, StatefulInteractiveElement, canvas, hsla, size, svg};
 /// equal relative share of the row's width — sidesteps needing to measure
 /// the panel's actual pixel width to decide how many tiles fit.
 pub(crate) const EMOJI_GRID_COLUMNS: usize = 10;
+/// Wide enough for "OPEN 12s" (the longest secret pill) at 10px plus padding.
+const SECRET_PILL_WIDTH: f32 = 60.0;
+/// Wide enough for an "HH:MM" recency label at 11px.
+const RECENCY_LABEL_WIDTH: f32 = 34.0;
 
 /// The visual for a single emoji tile. On Linux the glyph is rendered from its
 /// bundled Noto Color Emoji PNG (keyed by codepoints joined with `-`, served by
@@ -2579,8 +2583,13 @@ impl LauncherView {
 
         if let Some(pill) = secret_pill {
             fill = fill.child(
+                // Fixed width with centred text so LOCKED and OPEN 12s occupy
+                // the same box and the pill doesn't shift on reveal.
                 div()
                     .flex_none()
+                    .w(px(SECRET_PILL_WIDTH))
+                    .flex()
+                    .justify_center()
                     .text_size(px(10.0))
                     .line_height(px(14.0))
                     .text_color(tag_chip_color(&pill, palette.dark))
@@ -2595,9 +2604,14 @@ impl LauncherView {
 
         // Trailing slot: every row keeps its relative-time label, pinned or not
         // — the "PINNED" section header already carries that distinction.
+        // Fixed width, right-aligned, so the secret pill before it lines up
+        // across rows regardless of the label's proportional-font width.
         fill = fill.child(
             div()
                 .flex_none()
+                .w(px(RECENCY_LABEL_WIDTH))
+                .flex()
+                .justify_end()
                 .text_size(px(11.0))
                 .text_color(palette.row_meta_text)
                 .child(row_data.recency_label.clone()),
