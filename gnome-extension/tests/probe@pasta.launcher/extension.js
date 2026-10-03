@@ -35,6 +35,26 @@ export default class PastaTestProbe extends Extension {
         this._exported.export(Gio.DBus.session, '/com/pasta/TestProbe');
         this._ownerId = Gio.bus_own_name_on_connection(Gio.DBus.session, 'com.pasta.TestProbe',
             Gio.BusNameOwnerFlags.NONE, null, null);
+
+        // Dash to Dock is optional; its module is read only if it is loaded.
+        this._dashToDock = null;
+        const dock = Main.extensionManager.lookup('dash-to-dock@micxgx.gmail.com');
+        if (dock)
+            import(`${dock.dir.get_uri()}/extension.js`)
+                .then(module => (this._dashToDock = module))
+                .catch(e => console.log(`pasta-probe: Dash to Dock module not readable: ${e.message}`));
+    }
+
+    _dashToDockApps() {
+        const dash = this._dashToDock?.dockManager?._allDocks?.[0]?.dash ?? null;
+        if (!dash)
+            return null;
+        if (!dash.mapped)
+            return 'unmapped';
+        dash._redisplay();
+        return dash._box.get_children()
+            .map(child => child.child?._delegate?.app?.get_id())
+            .filter(Boolean);
     }
 
     Report() {
@@ -61,6 +81,7 @@ export default class PastaTestProbe extends Extension {
             })),
             appStateChanges: this._appStateChanges,
             everListed: this._everListed,
+            dashToDock: this._dashToDockApps(),
         });
     }
 
