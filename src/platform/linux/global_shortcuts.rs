@@ -45,9 +45,9 @@ const REQUEST_INTERFACE: &str = "org.freedesktop.portal.Request";
 const SESSION_INTERFACE: &str = "org.freedesktop.portal.Session";
 const REGISTRY_INTERFACE: &str = "org.freedesktop.host.portal.Registry";
 
-/// Must match the basename of `packaging/linux/com.pasta.launcher.desktop`;
-/// the portal rejects an app id it cannot resolve to an installed entry.
-const APP_ID: &str = "com.pasta.launcher";
+// The portal rejects an app id it cannot resolve to an installed entry, so
+// this relies on `APP_ID` matching the packaged desktop entry.
+use super::APP_ID;
 
 /// Identifies our one shortcut inside the session. Unsandboxed apps that never
 /// register an app id share a single permission bucket in some portal

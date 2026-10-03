@@ -47,6 +47,11 @@ use wl_clipboard_rs::paste::{
     ClipboardType, MimeType as PasteMimeType, Seat, get_contents, get_mime_types_ordered,
 };
 
+/// Must match the basename of `packaging/linux/com.pasta.launcher.desktop`.
+/// Desktops use it to tie our windows, portal requests and autostart entry
+/// to that installed entry (name and icon in the dock, Settings → Apps).
+pub(crate) const APP_ID: &str = "com.pasta.launcher";
+
 use crate::storage::ClipboardStorage;
 use crate::{
     ABOUT_WINDOW_HEIGHT, ABOUT_WINDOW_WIDTH, AboutWindowState, AutoClearState, CaptureFixAction,
@@ -1589,6 +1594,7 @@ pub(crate) fn create_background_anchor_window(
             is_minimizable: false,
             window_decorations: Some(WindowDecorations::Client),
             display_id,
+            app_id: Some(APP_ID.to_owned()),
             ..Default::default()
         },
         |_window, cx| cx.new(|_| BackgroundAnchorView),
@@ -1632,6 +1638,7 @@ pub(crate) fn create_launcher_window(cx: &mut App) -> Option<WindowHandle<Launch
             is_minimizable: false,
             window_decorations: Some(WindowDecorations::Client),
             display_id,
+            app_id: Some(APP_ID.to_owned()),
             ..Default::default()
         },
         move |window, cx| {
@@ -1815,6 +1822,7 @@ fn create_about_window(cx: &mut App) -> Option<WindowHandle<AboutView>> {
             is_minimizable: false,
             window_decorations: Some(WindowDecorations::Server),
             display_id,
+            app_id: Some(APP_ID.to_owned()),
             ..Default::default()
         },
         move |window, cx| {
