@@ -1735,7 +1735,9 @@ const ABOUT_GITHUB_URL: &str = "https://github.com/yafetgetachew/pasta";
 /// chain, which — being windows the WM placed itself rather than ones we
 /// created and centered — inherited the same off-center Mutter placement bug
 /// the launcher had before `center_window_on_primary`.
-pub(crate) struct AboutView;
+pub(crate) struct AboutView {
+    focus_handle: gpui::FocusHandle,
+}
 
 impl gpui::Render for AboutView {
     fn render(
@@ -1749,9 +1751,25 @@ impl gpui::Render for AboutView {
         let palette = palette_for(style.surface_alpha);
         let version = env!("CARGO_PKG_VERSION");
 
+        // Client-decorated like the launcher: the panel draws its own rounded
+        // hairline frame, so with no title bar it handles drag and Escape.
         div()
+            .id("about-panel")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, _| {
+                if event.keystroke.key == "escape" {
+                    window.remove_window();
+                }
+            }))
+            .on_mouse_down(MouseButton::Left, |_, window, _| {
+                window.start_window_move();
+            })
             .size_full()
             .bg(palette.window_bg)
+            .border_1()
+            .border_color(palette.window_border)
+            .rounded(px(10.0))
+            .overflow_hidden()
             .font_family(style.ui_font_family.clone())
             .font_weight(FontWeight::NORMAL)
             .flex()
@@ -1790,6 +1808,7 @@ impl gpui::Render for AboutView {
             .child(
                 div()
                     .id("about-github-link")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .mt_2()
                     .text_xs()
                     .text_color(palette.query_active)
@@ -1804,6 +1823,7 @@ impl gpui::Render for AboutView {
             .child(
                 div()
                     .id("about-close")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .mt_4()
                     .text_xs()
                     .text_color(palette.keycap_text)
@@ -1840,10 +1860,11 @@ fn create_about_window(cx: &mut App) -> Option<WindowHandle<AboutView>> {
             focus: true,
             show: true,
             kind: WindowKind::Normal,
+            window_background: WindowBackgroundAppearance::Transparent,
             is_movable: true,
             is_resizable: false,
             is_minimizable: false,
-            window_decorations: Some(WindowDecorations::Server),
+            window_decorations: Some(WindowDecorations::Client),
             display_id,
             app_id: Some(APP_ID.to_owned()),
             ..Default::default()
@@ -1852,7 +1873,11 @@ fn create_about_window(cx: &mut App) -> Option<WindowHandle<AboutView>> {
             // Same Mutter placement bug as the launcher: an unmarked "centered"
             // request is advisory only, so pin the position ourselves.
             center_window_on_primary(window, ABOUT_WINDOW_WIDTH, ABOUT_WINDOW_HEIGHT);
-            cx.new(|_| AboutView)
+            cx.new(|cx| {
+                let focus_handle = cx.focus_handle();
+                window.focus(&focus_handle);
+                AboutView { focus_handle }
+            })
         },
     ) {
         Ok(window) => Some(window),
