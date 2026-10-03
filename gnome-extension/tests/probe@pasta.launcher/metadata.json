@@ -1,0 +1,7 @@
+{
+  "uuid": "probe@pasta.launcher",
+  "name": "Pasta test probe",
+  "description": "Test-only. Reports what GNOME Shell's app and window lists see. Never packaged.",
+  "shell-version": ["50"],
+  "version": 1
+}
