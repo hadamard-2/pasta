@@ -101,7 +101,7 @@ if [[ "${PURGE}" -eq 1 ]]; then
 
   DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/${APP_DIR_NAME}"
   CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/${APP_DIR_NAME}"
-  AUTOSTART="${XDG_CONFIG_HOME:-${HOME}/.config}/autostart/pasta.desktop"
+  AUTOSTART_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/autostart"
 
   if [[ -d "${DATA_DIR}" ]]; then
     rm -rf "${DATA_DIR}"
@@ -111,7 +111,8 @@ if [[ "${PURGE}" -eq 1 ]]; then
     rm -rf "${CACHE_DIR}"
     echo "Removed: ${CACHE_DIR}"
   fi
-  remove_quiet "${AUTOSTART}"
+  remove_quiet "${AUTOSTART_DIR}/com.pasta.launcher.desktop"
+  remove_quiet "${AUTOSTART_DIR}/pasta.desktop" # written by older builds
 
   # Secret-service entry that stores the AES key for encrypted clipboard
   # secrets. Service + account must match src/storage.rs::KEYCHAIN_{SERVICE,

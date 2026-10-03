@@ -1024,8 +1024,23 @@ pub(crate) fn spawn_trigger_listener() {
 // Autostart (Phase 3) — XDG counterpart to macOS launch_agent
 // ---------------------------------------------------------------------------
 
+/// Named after the app id so desktops treat it as the same app as the
+/// installed `com.pasta.launcher.desktop` rather than a second "Pasta".
 fn autostart_desktop_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("autostart").join(format!("{APP_ID}.desktop")))
+}
+
+/// Where older builds wrote the autostart entry; migrated on startup.
+fn legacy_autostart_desktop_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("autostart").join("pasta.desktop"))
+}
+
+fn remove_if_present(path: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 fn render_autostart_entry() -> String {
@@ -1046,16 +1061,19 @@ fn render_autostart_entry() -> String {
 
 pub(crate) fn launch_agent_is_installed() -> bool {
     autostart_desktop_path().is_some_and(|path| path.exists())
+        || legacy_autostart_desktop_path().is_some_and(|path| path.exists())
 }
 
 /// Called once on startup. If an autostart entry already exists, refresh its
 /// Exec= line so app updates keep working. Never create a new entry here —
-/// that is reserved for an explicit user opt-in via the tray menu.
+/// that is reserved for an explicit user opt-in via the tray menu. An entry
+/// left at the legacy path counts as that opt-in and is moved to the new one.
 pub(crate) fn ensure_launch_agent_registered() {
     let Some(desktop_path) = autostart_desktop_path() else {
         return;
     };
-    if !desktop_path.exists() {
+    let legacy_path = legacy_autostart_desktop_path().filter(|path| path.exists());
+    if !desktop_path.exists() && legacy_path.is_none() {
         return;
     }
     let entry = render_autostart_entry();
@@ -1065,6 +1083,12 @@ pub(crate) fn ensure_launch_agent_registered() {
     };
     if should_write && let Err(err) = std::fs::write(&desktop_path, entry) {
         eprintln!("warning: unable to refresh autostart entry: {err}");
+        return;
+    }
+    if let Some(legacy_path) = legacy_path
+        && let Err(err) = remove_if_present(&legacy_path)
+    {
+        eprintln!("warning: unable to remove legacy autostart entry: {err}");
     }
 }
 
@@ -1087,14 +1111,13 @@ pub(crate) fn install_launch_agent() -> std::io::Result<()> {
 }
 
 pub(crate) fn uninstall_launch_agent() -> std::io::Result<()> {
-    let Some(desktop_path) = autostart_desktop_path() else {
-        return Ok(());
-    };
-    match std::fs::remove_file(&desktop_path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
+    for path in [autostart_desktop_path(), legacy_autostart_desktop_path()]
+        .into_iter()
+        .flatten()
+    {
+        remove_if_present(&path)?;
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
