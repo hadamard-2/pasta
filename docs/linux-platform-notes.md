@@ -122,6 +122,14 @@ Dash to Dock was checked for real in the nested shell, not skipped: Pasta is abs
 
 Disabling the extension restores Pasta everywhere without restarting Pasta (verified in the scenario). In GNOME 50.1, disabling an extension first disables every extension enabled after it and re-enables them afterwards (verified in `extensionSystem.js`, `_callExtensionDisable`), which is why the scenario enables the probe before `clipboard@pasta.launcher`. The X11 path (`set_skip_taskbar_and_pager`) is unchanged.
 
+## Pasting on Enter
+
+Enter and double-click paste the chosen item into the window that regains focus; Ctrl+Enter only copies (`Delivery` in `src/app/actions.rs`). Which session types can paste is decided by the clipboard path (`paste_supported()` in `src/platform/linux/paste.rs`): the GNOME extension path and X11 paste, every other Wayland desktop copies only — KDE, Sway and Hyprland would each need their own injection protocol, and `/dev/uinput` is root-only on stock installs. Terminals get Ctrl+Shift+V and everything else Ctrl+V, chosen by app ID against `TERMINAL_APP_IDS`; the GNOME extension receives that list with each request, so adding a terminal needs no extension update.
+
+- **GNOME:** `com.pasta.Launcher.ShellBridge1.Paste(as)` waits up to 1000 ms for a window whose PID is not the caller's to take focus, then presses the shortcut through a Clutter virtual keyboard (the mechanism GNOME's on-screen keyboard uses). Bridge writes and paste requests share one serial worker thread, which is what guarantees the extension sets the clipboard before it pastes. An extension older than version 3 answers `UnknownMethod`; Pasta logs `paste skipped` and the item stays copied.
+- **X11:** verified by `strace` that `xclip` takes the CLIPBOARD selection in its forked child, after the process Pasta waits on has exited, and from GPUI 0.2.2's source that its X11 write first makes GPUI's own window the owner (with an empty string for images). So `begin_paste` records the owner right after the GPUI write and the paste thread waits for it to change before pressing keys through XTest. Not yet exercised end to end on a real X11 session.
+- Pasting never restores the previous clipboard content; that is a deliberate decision, not an omission.
+
 ## Single-instance guard + `--show` trigger
 
 Two cooperating pieces in `src/platform/linux/mod.rs`, wired from the Linux `main()`:

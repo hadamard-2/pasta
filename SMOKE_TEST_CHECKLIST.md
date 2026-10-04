@@ -33,7 +33,7 @@ Current baseline:
 
 ### GNOME clipboard extension (GNOME 50, live session)
 
-- Run `gnome-extension/tests/run-all.sh` first (quit Pasta before running it) and confirm four `PASS` lines.
+- Run `gnome-extension/tests/run-all.sh` first (quit Pasta before running it) and confirm six `PASS` lines.
 - On a fresh install, open the launcher and confirm the banner says to log out and back in; log out and in, confirm it now offers **Enable**; click it and confirm the banner disappears.
 - Copy text in a terminal and in a browser; confirm both appear in history.
 - Take a screenshot to the clipboard; confirm an image item appears.
@@ -42,6 +42,7 @@ Current baseline:
 - Copy a text item and an image item back out of history and paste them into another app.
 - With secret auto-clear enabled, copy a secret from history and confirm the clipboard is empty about 30 seconds later.
 - Disable the extension in GNOME's Extensions app and confirm the banner returns with **Enable**.
+- After upgrading to extension version 3 and logging out and back in, confirm Enter pastes; before the re-login, confirm Enter still copies and Pasta's log shows `paste skipped`.
 
 ### GNOME (Wayland)
 
@@ -71,7 +72,14 @@ Current baseline:
 
 ### Clipboard Actions
 
-- Press `Enter` on a normal item and confirm it copies.
+- Focus a text field in another app, open the launcher, press `Enter` on a normal item, and confirm the launcher hides and the item is pasted into that field.
+- Repeat with a double click on a row.
+- Press `Ctrl+Enter` (`Cmd+Enter` on macOS) on an item and confirm it is copied but not pasted.
+- Paste an image item into an app that accepts images (e.g. a chat or document editor).
+- With a terminal focused (Ptyxis, Ghostty, GNOME Terminal), press `Enter` on an item and confirm it is pasted, not a literal `^V`.
+- Open the launcher from the desktop with no window focused, press `Enter`, and confirm nothing is typed anywhere and the item is on the clipboard.
+- On a desktop that cannot paste (KDE, Sway, Hyprland on Wayland), confirm `Enter` copies exactly as before and the command palette shows only "Copy" with `Enter`.
+- (macOS) On the first paste without the Accessibility permission, confirm the system prompt appears and the item is copied only; after granting it, confirm Enter pastes.
 - Click a row and confirm current click behavior still matches expectations.
 - Delete an item with `Delete` or `Ctrl+Backspace`.
 - Copy an item from partway down the list with `Enter` or a double click, reopen the launcher, and confirm it now sits at the top with a refreshed relative time.
@@ -86,6 +94,8 @@ Current baseline:
 - Confirm the current Linux auth behavior matches expectations for this build.
 - Copy a revealed secret and confirm auto-clear still behaves as expected.
 - Copy a URL and confirm it lands in history as a normal item — unmasked, and with no auth prompt to view it.
+- Press `Enter` on a masked secret with a text field focused behind the launcher: confirm authentication, then the secret is pasted and the launcher hides; after 30 seconds the clipboard is cleared if auto-clear is on.
+- Press `Ctrl+Enter` on a masked secret and confirm today's behaviour: authenticate, copy, launcher stays open with the 12-second reveal.
 
 ### Editors
 
@@ -95,12 +105,12 @@ Current baseline:
 - Open bowl editor with `Ctrl+B`: confirm it is prefilled with the current bowl and that a blank field removes the item from its bowl.
 - Confirm the preview pane shows the item's bowl (tags and the info note are deliberately not shown there).
 - Open parameter editor with `Ctrl+P`.
-- Open parameter fill flow by copying a parameterized item.
+- Open the parameter fill flow with `Enter` on a parameterized item, fill it, press `Enter`, and confirm the rendered text is pasted; repeat with `Ctrl+Enter` to commit and confirm it is copied only.
 
 ### Emoji Picker
 
 - Type `e` to surface the emoji affordance and enter the picker.
-- Pick an emoji with `Enter` and confirm the launcher closes and the glyph is on the clipboard.
+- Pick an emoji with `Enter` and confirm the launcher closes and the glyph is pasted into the focused field; `Ctrl+Enter` copies it only.
 - Pick an emoji by clicking a tile and confirm the launcher closes the same way.
 - Reopen the launcher and confirm it comes back to the normal results list, not the emoji grid.
 - Confirm the picked emoji did **not** create a clipboard history entry.
