@@ -1,6 +1,8 @@
 //! Pasting into the window that regains focus after the launcher hides:
-//! through the GNOME Shell extension on GNOME, not at all on other Wayland
-//! desktops.
+//! through the GNOME Shell extension on GNOME, through XTest on X11, and not
+//! at all on other Wayland desktops.
+
+mod x11;
 
 use gpui::App;
 
@@ -41,6 +43,11 @@ pub(crate) fn is_terminal<'a>(ids: impl IntoIterator<Item = &'a str>) -> bool {
 
 enum Ticket {
     Gnome,
+    /// The CLIPBOARD owner right after the GPUI write; the paste waits for
+    /// the platform write to replace it.
+    X11 {
+        owner_before: u32,
+    },
 }
 
 /// Proof that a paste was prepared before the platform clipboard write,
@@ -48,7 +55,7 @@ enum Ticket {
 pub(crate) struct PasteTicket(Ticket);
 
 fn supported_on(path: ClipboardPath) -> bool {
-    matches!(path, ClipboardPath::GnomeExtension)
+    matches!(path, ClipboardPath::GnomeExtension | ClipboardPath::X11)
 }
 
 /// Whether this session can paste on the user's behalf.
@@ -61,7 +68,14 @@ pub(crate) fn paste_supported() -> bool {
 pub(crate) fn begin_paste() -> Option<PasteTicket> {
     match clipboard_path() {
         ClipboardPath::GnomeExtension => Some(PasteTicket(Ticket::Gnome)),
-        ClipboardPath::X11 | ClipboardPath::Wayland => None,
+        ClipboardPath::X11 => match x11::clipboard_owner() {
+            Some(owner_before) => Some(PasteTicket(Ticket::X11 { owner_before })),
+            None => {
+                eprintln!("warning: paste skipped: could not read the X11 clipboard owner");
+                None
+            }
+        },
+        ClipboardPath::Wayland => None,
     }
 }
 
@@ -71,6 +85,18 @@ pub(crate) fn request_paste(ticket: PasteTicket, _cx: &mut App) {
     match ticket.0 {
         // Queued behind the clipboard write, so the shell pastes the new content.
         Ticket::Gnome => queue_gnome_paste(),
+        Ticket::X11 { owner_before } => {
+            let spawned = std::thread::Builder::new()
+                .name("pasta-x11-paste".to_owned())
+                .spawn(move || {
+                    if let Err(err) = x11::paste(owner_before) {
+                        eprintln!("warning: paste skipped: {err}");
+                    }
+                });
+            if let Err(err) = spawned {
+                eprintln!("warning: paste skipped: could not start the X11 paste thread: {err}");
+            }
+        }
     }
 }
 
@@ -96,9 +122,9 @@ mod tests {
     }
 
     #[test]
-    fn only_the_gnome_extension_path_pastes_so_far() {
+    fn gnome_and_x11_paste_other_wayland_desktops_do_not() {
         assert!(supported_on(ClipboardPath::GnomeExtension));
+        assert!(supported_on(ClipboardPath::X11));
         assert!(!supported_on(ClipboardPath::Wayland));
-        assert!(!supported_on(ClipboardPath::X11));
     }
 }
