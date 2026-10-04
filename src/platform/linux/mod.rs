@@ -795,20 +795,85 @@ pub(crate) fn read_clipboard_image() -> Option<(Vec<u8>, String)> {
         .and_then(|snapshot| snapshot.image())
 }
 
-/// The bridge call waits for the shell to read the whole payload, so it runs
-/// off the UI thread.
-fn write_through_gnome_bridge(mimetype: &str, bytes: Vec<u8>) {
-    let mimetype = mimetype.to_owned();
-    let spawned = std::thread::Builder::new()
-        .name("pasta-gnome-write".to_owned())
+/// Work for the GNOME Shell bridge. Done in order on one thread, so a paste
+/// request always reaches the shell after the write queued before it.
+enum BridgeJob {
+    Write { mimetype: String, bytes: Vec<u8> },
+    Paste,
+}
+
+/// Runs `run` on each job sent to the returned channel, one at a time and in
+/// send order, on a thread named `name`. A panicking job is logged and the
+/// worker carries on with the next.
+fn spawn_serial_worker<J: Send + 'static>(
+    name: &str,
+    mut run: impl FnMut(J) + Send + 'static,
+) -> std::io::Result<mpsc::Sender<J>> {
+    let (tx, rx) = mpsc::channel::<J>();
+    let thread_name = name.to_owned();
+    std::thread::Builder::new()
+        .name(thread_name.clone())
         .spawn(move || {
+            for job in rx {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(job)));
+                if outcome.is_err() {
+                    eprintln!("warning: a {thread_name} job panicked; continuing");
+                }
+            }
+        })?;
+    Ok(tx)
+}
+
+fn bridge_jobs() -> Option<&'static mpsc::Sender<BridgeJob>> {
+    static JOBS: OnceLock<Option<mpsc::Sender<BridgeJob>>> = OnceLock::new();
+    JOBS.get_or_init(
+        || match spawn_serial_worker("pasta-gnome-bridge", run_bridge_job) {
+            Ok(jobs) => Some(jobs),
+            Err(err) => {
+                eprintln!("warning: could not start the GNOME bridge worker thread: {err}");
+                None
+            }
+        },
+    )
+    .as_ref()
+}
+
+/// Bridge calls wait for the shell (to read a payload, or to find a window to
+/// paste into), so they run here, off the UI thread.
+fn run_bridge_job(job: BridgeJob) {
+    match job {
+        BridgeJob::Write { mimetype, bytes } => {
             if let Err(err) = gnome_bridge_client::set_clipboard(&mimetype, bytes) {
                 eprintln!("warning: GNOME clipboard write of {mimetype} failed: {err}");
             }
-        });
-    if let Err(err) = spawned {
-        eprintln!("warning: could not start GNOME clipboard writer thread: {err}");
+        }
+        BridgeJob::Paste => {
+            if let Err(err) = gnome_bridge_client::paste(paste::TERMINAL_APP_IDS) {
+                eprintln!("warning: paste skipped: {err}");
+            }
+        }
     }
+}
+
+fn queue_bridge_job(job: BridgeJob) {
+    let Some(jobs) = bridge_jobs() else {
+        return;
+    };
+    if jobs.send(job).is_err() {
+        eprintln!("warning: the GNOME bridge worker has stopped; request dropped");
+    }
+}
+
+fn write_through_gnome_bridge(mimetype: &str, bytes: Vec<u8>) {
+    queue_bridge_job(BridgeJob::Write {
+        mimetype: mimetype.to_owned(),
+        bytes,
+    });
+}
+
+/// Asks the shell to paste once every write queued before this has landed.
+fn queue_gnome_paste() {
+    queue_bridge_job(BridgeJob::Paste);
 }
 
 /// Upper bound on a file-manager-copied image Pasta will pull into history.
@@ -2756,5 +2821,49 @@ mod tests {
     fn ignores_remote_uris() {
         let payload = b"copy\nsmb://server/share/photo.png";
         assert_eq!(first_local_file_from_uri_payload(payload), None);
+    }
+
+    #[test]
+    fn serial_worker_runs_jobs_in_send_order() {
+        let (done_tx, done_rx) = mpsc::channel();
+        let jobs = spawn_serial_worker("test-serial-order", move |n: u32| {
+            // A slow first job must still finish before the second starts.
+            if n == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            done_tx.send(n).unwrap();
+        })
+        .unwrap();
+        for n in 0..5 {
+            jobs.send(n).unwrap();
+        }
+        let seen: Vec<u32> = (0..5)
+            .map(|_| {
+                done_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(seen, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn serial_worker_survives_a_panicking_job() {
+        let (done_tx, done_rx) = mpsc::channel();
+        let jobs = spawn_serial_worker("test-serial-panic", move |n: u32| {
+            if n == 0 {
+                panic!("job 0 fails on purpose");
+            }
+            done_tx.send(n).unwrap();
+        })
+        .unwrap();
+        jobs.send(0).unwrap();
+        jobs.send(1).unwrap();
+        assert_eq!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap(),
+            1
+        );
     }
 }

@@ -6,6 +6,7 @@
 //!     gnome_bridge_write <mimetype> <file>
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // the shared client module also carries paste
 #[path = "../src/platform/linux/gnome_bridge_client.rs"]
 mod gnome_bridge_client;
 

@@ -35,19 +35,7 @@ pub(crate) fn set_clipboard(mimetype: &str, bytes: Vec<u8>) -> Result<(), String
         ));
     }
     let conn = zbus::blocking::Connection::session().map_err(|err| err.to_string())?;
-    let dbus = zbus::blocking::fdo::DBusProxy::new(&conn).map_err(|err| err.to_string())?;
-    let name = zbus::names::BusName::try_from(BRIDGE_NAME).map_err(|err| err.to_string())?;
-    let owner = dbus.get_name_owner(name).map_err(|err| err.to_string())?;
-    let pid = dbus
-        .get_connection_unix_process_id((&owner).into())
-        .map_err(|err| err.to_string())?;
-    let exe = std::fs::read_link(format!("/proc/{pid}/exe")).map_err(|err| err.to_string())?;
-    if !is_shell_executable(&exe) {
-        return Err(format!(
-            "{BRIDGE_NAME} is owned by {}, not {SHELL_EXE}",
-            exe.display()
-        ));
-    }
+    let owner = verified_bridge_owner(&conn)?;
 
     let (reader, mut writer) = std::io::pipe().map_err(|err| err.to_string())?;
     let feeder = std::thread::spawn(move || writer.write_all(&bytes));
@@ -66,6 +54,45 @@ pub(crate) fn set_clipboard(mimetype: &str, bytes: Vec<u8>) -> Result<(), String
         .map_err(|_| "clipboard feeder thread panicked".to_owned())?;
     reply.map_err(|err| err.to_string())?;
     fed.map_err(|err| err.to_string())
+}
+
+/// Unique name of the bridge's current owner, after checking that it is the
+/// installed gnome-shell.
+fn verified_bridge_owner(
+    conn: &zbus::blocking::Connection,
+) -> Result<zbus::names::OwnedUniqueName, String> {
+    let dbus = zbus::blocking::fdo::DBusProxy::new(conn).map_err(|err| err.to_string())?;
+    let name = zbus::names::BusName::try_from(BRIDGE_NAME).map_err(|err| err.to_string())?;
+    let owner = dbus.get_name_owner(name).map_err(|err| err.to_string())?;
+    let pid = dbus
+        .get_connection_unix_process_id((&owner).into())
+        .map_err(|err| err.to_string())?;
+    let exe = std::fs::read_link(format!("/proc/{pid}/exe")).map_err(|err| err.to_string())?;
+    if !is_shell_executable(&exe) {
+        return Err(format!(
+            "{BRIDGE_NAME} is owned by {}, not {SHELL_EXE}",
+            exe.display()
+        ));
+    }
+    Ok(owner)
+}
+
+/// Calls the bridge's `Paste`: the shell presses Ctrl+Shift+V in the window
+/// that next holds focus if that window's app ID is in `terminal_app_ids`,
+/// Ctrl+V otherwise, or answers with an error if no such window comes. Blocks
+/// until it answers; call it off the UI thread.
+pub(crate) fn paste(terminal_app_ids: &[&str]) -> Result<(), String> {
+    let conn = zbus::blocking::Connection::session().map_err(|err| err.to_string())?;
+    let owner = verified_bridge_owner(&conn)?;
+    conn.call_method(
+        Some(owner.as_str()),
+        BRIDGE_PATH,
+        Some(BRIDGE_IFACE),
+        "Paste",
+        &(terminal_app_ids,),
+    )
+    .map(|_| ())
+    .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
