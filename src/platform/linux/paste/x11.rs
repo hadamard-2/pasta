@@ -30,13 +30,32 @@ fn selection_owner(conn: &impl Connection, selection: u32) -> Option<Window> {
     )
 }
 
-fn first_u32(conn: &impl Connection, window: Window, property: u32, kind: AtomEnum) -> Option<u32> {
+/// The first 32-bit value of a window property: `Err` when the request failed
+/// (for example the window is gone), `Ok(None)` when the window answered but
+/// has no such value.
+fn read_u32(
+    conn: &impl Connection,
+    window: Window,
+    property: u32,
+    kind: AtomEnum,
+) -> Result<Option<u32>, ()> {
     let reply = conn
         .get_property(false, window, property, kind, 0, 1)
-        .ok()?
+        .map_err(drop)?
         .reply()
-        .ok()?;
-    reply.value32()?.next()
+        .map_err(drop)?;
+    Ok(reply.value32().and_then(|mut values| values.next()))
+}
+
+fn first_u32(conn: &impl Connection, window: Window, property: u32, kind: AtomEnum) -> Option<u32> {
+    read_u32(conn, window, property, kind).ok().flatten()
+}
+
+/// Whether a `_NET_WM_PID` read shows a window that is not ours. A failed read
+/// shows nothing, so it never qualifies; a live window without the property
+/// does, since its owner cannot be identified as this process.
+fn is_other_process(pid_read: Result<Option<u32>, ()>, our_pid: u32) -> bool {
+    matches!(pid_read, Ok(pid) if pid != Some(our_pid))
 }
 
 /// The window that owns the CLIPBOARD selection right now (`x11rb::NONE` when
@@ -100,7 +119,7 @@ pub(super) fn paste(owner_before: Window) -> Result<(), String> {
             .filter(|&window| window != x11rb::NONE);
         if owner_changed
             && let Some(window) = focused
-            && first_u32(&conn, window, pid, AtomEnum::CARDINAL) != Some(our_pid)
+            && is_other_process(read_u32(&conn, window, pid, AtomEnum::CARDINAL), our_pid)
         {
             break window;
         }
@@ -162,6 +181,14 @@ mod tests {
         );
         assert_eq!(wm_class_names(b"kitty\0kitty"), vec!["kitty", "kitty"]);
         assert!(wm_class_names(b"").is_empty());
+    }
+
+    #[test]
+    fn a_failed_pid_read_is_not_proof_of_another_process() {
+        assert!(!is_other_process(Err(()), 42));
+        assert!(!is_other_process(Ok(Some(42)), 42));
+        assert!(is_other_process(Ok(Some(7)), 42));
+        assert!(is_other_process(Ok(None), 42));
     }
 
     #[test]
