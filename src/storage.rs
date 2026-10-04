@@ -840,22 +840,6 @@ impl ClipboardStorage {
         Ok(deleted > 0)
     }
 
-    /// Bumps `last_used_at` to now, so re-copying an existing item resurfaces
-    /// it at the top of the default (recency-ordered) listing — otherwise a
-    /// re-copy leaves the item exactly where it already was, which reads as if
-    /// nothing happened. `created_at` is deliberately left alone: the detail
-    /// pane still reports when the clip was first captured.
-    pub fn touch_clipboard_item(&self, id: i64) -> Result<()> {
-        let conn = self.open()?;
-        let last_used_at = Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE clipboard_items SET last_used_at = ?1 WHERE id = ?2",
-            params![last_used_at, id],
-        )?;
-        drop(conn);
-        self.sync_index_record_from_db(id)
-    }
-
     pub fn mark_item_as_secret(&self, id: i64) -> Result<bool> {
         let mut conn = self.open()?;
         let tx = conn.transaction()?;
@@ -4637,61 +4621,6 @@ mod tests {
             listed_contents(&storage, 3),
             vec!["alpha", "beta"],
             "re-copying an existing clip should lift it back to the top"
-        );
-    }
-
-    #[test]
-    fn touching_an_item_reorders_it_without_rewriting_its_capture_time() {
-        let storage = test_storage("touch-reorder");
-        storage
-            .upsert_clipboard_item("alpha")
-            .expect("insert alpha");
-        storage.upsert_clipboard_item("beta").expect("insert beta");
-
-        let seeded = storage
-            .search_items("", 10, false, SearchExecution::Fast, 1, None)
-            .expect("should load items");
-        let alpha = seeded
-            .iter()
-            .find(|item| item.content == "alpha")
-            .expect("alpha should exist")
-            .clone();
-        let beta_id = seeded
-            .iter()
-            .find(|item| item.content == "beta")
-            .expect("beta should exist")
-            .id;
-        force_last_used(&storage, alpha.id, "2026-03-11T00:00:00+00:00");
-        force_last_used(&storage, beta_id, "2026-03-11T00:01:00+00:00");
-        assert_eq!(listed_contents(&storage, 2), vec!["beta", "alpha"]);
-
-        storage
-            .touch_clipboard_item(alpha.id)
-            .expect("touch should succeed");
-
-        let listed = storage
-            .search_items("", 10, false, SearchExecution::Fast, 3, None)
-            .expect("should load items");
-        assert_eq!(
-            listed
-                .iter()
-                .map(|item| item.content.as_str())
-                .collect::<Vec<_>>(),
-            vec!["alpha", "beta"],
-            "copying an existing clip should lift it back to the top"
-        );
-
-        let touched = listed
-            .iter()
-            .find(|item| item.id == alpha.id)
-            .expect("alpha should still exist");
-        assert_eq!(
-            touched.created_at, alpha.created_at,
-            "the capture time is what the detail pane reports; only recency moves"
-        );
-        assert_ne!(
-            touched.last_used_at, touched.created_at,
-            "the recency column should have advanced past the capture time"
         );
     }
 
