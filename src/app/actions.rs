@@ -14,6 +14,7 @@ use toml::Value as TomlValue;
 /// variant maps to an existing item action in `execute_command`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandAction {
+    Paste,
     Copy,
     TogglePin,
     Name,
@@ -32,9 +33,24 @@ impl CommandAction {
     /// list, shown faded beside its palette row. Must be kept in step with the
     /// key routing in `handle_keystroke`.
     pub(crate) fn shortcut_label(self) -> &'static str {
+        self.shortcut_label_for(paste_supported())
+    }
+
+    /// `shortcut_label` for a platform that can (or cannot) paste: Enter
+    /// pastes where it can, which moves copy-only to the action modifier.
+    pub(crate) fn shortcut_label_for(self, paste_supported: bool) -> &'static str {
         let mac = cfg!(target_os = "macos");
         match self {
-            CommandAction::Copy => "Enter",
+            CommandAction::Paste => "Enter",
+            CommandAction::Copy => {
+                if !paste_supported {
+                    "Enter"
+                } else if mac {
+                    "⌘↩"
+                } else {
+                    "Ctrl+Enter"
+                }
+            }
             CommandAction::TogglePin => {
                 if mac {
                     "⌘⇧P"
@@ -115,6 +131,59 @@ impl CommandItem {
     }
 }
 
+/// The palette's delivery rows: "Paste" (Enter) above "Copy" where this
+/// platform can paste, otherwise "Copy" alone, which Enter then runs.
+fn delivery_command_items(paste_supported: bool) -> Vec<CommandItem> {
+    let mut items = Vec::new();
+    if paste_supported {
+        items.push(CommandItem::new(
+            CommandAction::Paste,
+            "Paste into previous app",
+            "paste insert type enter",
+        ));
+    }
+    items.push(CommandItem::new(
+        CommandAction::Copy,
+        "Copy to clipboard",
+        "copy paste clipboard",
+    ));
+    items
+}
+
+/// What choosing an item does with it: paste it into the window that regains
+/// focus once the launcher hides, or only put it on the clipboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Delivery {
+    Paste,
+    CopyOnly,
+}
+
+impl Delivery {
+    /// Enter and double-click paste where the platform can; holding the
+    /// action modifier asks for copy-only.
+    pub(crate) fn for_choice(copy_only_requested: bool, paste_supported: bool) -> Self {
+        if paste_supported && !copy_only_requested {
+            Delivery::Paste
+        } else {
+            Delivery::CopyOnly
+        }
+    }
+
+    pub(crate) fn chosen(copy_only_requested: bool) -> Self {
+        Self::for_choice(copy_only_requested, paste_supported())
+    }
+}
+
+/// The platform's app-shortcut modifier: Cmd (`platform`) on macOS, Ctrl on
+/// Linux — GPUI maps `platform` to Super/Meta there.
+pub(crate) fn action_modifier_held(modifiers: &gpui::Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.platform && !modifiers.control
+    } else {
+        modifiers.control && !modifiers.platform
+    }
+}
+
 const TAG_SEARCH_AUTOCOMPLETE_LIMIT: usize = 6;
 const SEARCH_SEMANTIC_DELAY_MS: u64 = 90;
 const SEARCH_NEURAL_DELAY_MS: u64 = 320;
@@ -164,6 +233,7 @@ impl LauncherView {
             transition_started_at: Instant::now(),
             transition_duration: Duration::from_millis(WINDOW_OPEN_DURATION_MS),
             pending_exit: None,
+            pending_paste: None,
             revealed_secret_id: None,
             reveal_until: None,
             last_reveal_second_bucket: None,
@@ -232,6 +302,7 @@ impl LauncherView {
         self.row_presentations.clear();
         self.revealed_secret_id = None;
         self.reveal_until = None;
+        self.pending_paste = None;
         self.last_reveal_second_bucket = None;
         self.info_editor_target_id = None;
         self.info_editor_input.clear();
@@ -565,14 +636,19 @@ impl LauncherView {
         }
 
         if !self.can_copy_secret_now(item.id) {
-            self.reveal_secret(item.id, true, cx);
+            self.reveal_secret(item.id, Some(Delivery::CopyOnly), cx);
             return;
         }
 
-        self.copy_selected_to_clipboard(cx);
+        self.deliver_selected(Delivery::CopyOnly, cx);
     }
 
-    pub(crate) fn reveal_secret(&mut self, item_id: i64, copy_after: bool, cx: &mut Context<Self>) {
+    pub(crate) fn reveal_secret(
+        &mut self,
+        item_id: i64,
+        then_deliver: Option<Delivery>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(item) = self.items.iter().find(|item| item.id == item_id).cloned() else {
             return;
         };
@@ -586,8 +662,10 @@ impl LauncherView {
         self.revealed_secret_id = Some(item.id);
         self.reveal_until = Some(Instant::now() + Duration::from_secs(12));
 
-        if copy_after && let Some(ix) = self.items.iter().position(|i| i.id == item.id) {
-            self.copy_index_to_clipboard(ix, cx);
+        if let Some(delivery) = then_deliver
+            && let Some(ix) = self.items.iter().position(|i| i.id == item.id)
+        {
+            self.deliver_index(ix, delivery, cx);
             return;
         }
 
@@ -881,13 +959,61 @@ impl LauncherView {
         cx.notify();
     }
 
-    pub(crate) fn copy_selected_to_clipboard(&mut self, cx: &mut Context<Self>) {
+    /// Puts `text` on the clipboard and, for a paste, prepares it. The order
+    /// is the same on every path: GPUI write, then `begin_paste`, then the
+    /// platform write — on X11 the ticket records the owner the GPUI write
+    /// just set, so the paste waits for the platform write to take over.
+    fn write_text_for_delivery(
+        &mut self,
+        text: &str,
+        delivery: Delivery,
+        cx: &mut Context<Self>,
+    ) -> Option<PasteTicket> {
+        self.mark_self_clipboard_write(text.as_bytes(), cx);
+        cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
+        let ticket = match delivery {
+            Delivery::Paste => begin_paste(),
+            Delivery::CopyOnly => None,
+        };
+        // On Wayland, the GPUI window must stay alive to serve paste requests.
+        // Since Pasta destroys the window on hide, also write via wl-clipboard-rs
+        // which forks a background process to serve the data independently.
+        #[cfg(target_os = "linux")]
+        write_clipboard_text(text);
+        ticket
+    }
+
+    /// Image counterpart of [`Self::write_text_for_delivery`], same order.
+    fn write_image_for_delivery(
+        &mut self,
+        bytes: Vec<u8>,
+        mime_type: &str,
+        delivery: Delivery,
+        cx: &mut Context<Self>,
+    ) -> Option<PasteTicket> {
+        let format = ImageFormat::from_mime_type(mime_type).unwrap_or(ImageFormat::Png);
+        self.mark_self_clipboard_write(&bytes, cx);
+        cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(
+            format,
+            bytes.clone(),
+        )));
+        let ticket = match delivery {
+            Delivery::Paste => begin_paste(),
+            Delivery::CopyOnly => None,
+        };
+        // Same reason as for text: the GPUI window does not outlive the hide.
+        #[cfg(target_os = "linux")]
+        write_clipboard_image_bytes(&bytes, mime_type);
+        ticket
+    }
+
+    pub(crate) fn deliver_selected(&mut self, delivery: Delivery, cx: &mut Context<Self>) {
         let Some(item) = self.items.get(self.selected_index).cloned() else {
             return;
         };
 
         if item.item_type == ClipboardItemType::Password && !self.can_copy_secret_now(item.id) {
-            self.reveal_secret(item.id, true, cx);
+            self.reveal_secret(item.id, Some(delivery), cx);
             return;
         }
 
@@ -901,38 +1027,26 @@ impl LauncherView {
                 show_macos_notification("Pasta", "Couldn't read image from disk.");
                 return;
             };
-            let format = ImageFormat::from_mime_type(&image.mime_type).unwrap_or(ImageFormat::Png);
-
-            self.mark_self_clipboard_write(&bytes, cx);
-            cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(
-                format,
-                bytes.clone(),
-            )));
-            // On Wayland, the GPUI window must stay alive to serve paste requests.
-            // Since Pasta destroys the window on hide, also write via wl-clipboard-rs
-            // which forks a background process to serve the data independently.
-            #[cfg(target_os = "linux")]
-            write_clipboard_image_bytes(&bytes, &image.mime_type);
-
+            self.pending_paste =
+                self.write_image_for_delivery(bytes, &image.mime_type, delivery, cx);
             self.begin_close_transition(LauncherExitIntent::Hide);
             cx.notify();
             return;
         }
 
-        self.mark_self_clipboard_write(item.content.as_bytes(), cx);
-        cx.write_to_clipboard(ClipboardItem::new_string(item.content.clone()));
-        // On Wayland, the GPUI window must stay alive to serve paste requests.
-        // Since Pasta destroys the window on hide, also write via wl-clipboard-rs
-        // which forks a background process to serve the data independently.
-        #[cfg(target_os = "linux")]
-        write_clipboard_text(&item.content);
+        let ticket = self.write_text_for_delivery(&item.content, delivery, cx);
         if item.item_type == ClipboardItemType::Password {
             self.schedule_secret_autoclear(&item.content, cx);
-            self.revealed_secret_id = Some(item.id);
-            self.reveal_until = Some(Instant::now() + Duration::from_secs(12));
-            cx.notify();
-            return;
+            // Copy-only keeps the secret on screen for its reveal window; a
+            // paste hides the launcher like any other item.
+            if ticket.is_none() {
+                self.revealed_secret_id = Some(item.id);
+                self.reveal_until = Some(Instant::now() + Duration::from_secs(12));
+                cx.notify();
+                return;
+            }
         }
+        self.pending_paste = ticket;
         self.begin_close_transition(LauncherExitIntent::Hide);
         cx.notify();
     }
@@ -990,12 +1104,8 @@ impl LauncherView {
         let is_pinned = target.is_some_and(|item| item.pin_order.is_some());
         let is_secret = target.is_some_and(|item| item.item_type == ClipboardItemType::Password);
 
-        let mut all = vec![
-            CommandItem::new(
-                CommandAction::Copy,
-                "Copy to clipboard",
-                "copy paste clipboard",
-            ),
+        let mut all = delivery_command_items(paste_supported());
+        all.extend([
             CommandItem::new(
                 CommandAction::TogglePin,
                 if is_pinned { "Unpin item" } else { "Pin item" },
@@ -1031,7 +1141,7 @@ impl LauncherView {
                 "Transform…",
                 "transform json base64 url jwt hash qr encode decode",
             ),
-        ];
+        ]);
         if is_secret {
             all.push(CommandItem::new(
                 CommandAction::RevealSecret,
@@ -1120,7 +1230,8 @@ impl LauncherView {
         self.queue_text_input_focus(TextInputTarget::Query);
 
         match action {
-            CommandAction::Copy => self.copy_selected_to_clipboard(cx),
+            CommandAction::Paste => self.deliver_selected(Delivery::Paste, cx),
+            CommandAction::Copy => self.deliver_selected(Delivery::CopyOnly, cx),
             CommandAction::TogglePin => self.toggle_selected_item_pin(cx),
             CommandAction::Name => self.start_name_editor_for_selected(cx),
             CommandAction::SetInfo => self.start_info_editor_for_selected(cx),
@@ -1197,7 +1308,7 @@ impl LauncherView {
     /// ends the same way copying a clip does rather than leaving the window up.
     /// Uses `mark_self_clipboard_write` so this doesn't create a clipboard-history
     /// entry — it's a picker action, not a captured clipboard event.
-    pub(crate) fn copy_selected_emoji(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn copy_selected_emoji(&mut self, delivery: Delivery, cx: &mut Context<Self>) {
         let Some(entry_index) = self
             .emoji_search_results
             .get(self.emoji_search_selected_index)
@@ -1209,10 +1320,7 @@ impl LauncherView {
             return;
         };
 
-        self.mark_self_clipboard_write(glyph.as_bytes(), cx);
-        cx.write_to_clipboard(ClipboardItem::new_string(glyph.to_owned()));
-        #[cfg(target_os = "linux")]
-        write_clipboard_text(glyph);
+        self.pending_paste = self.write_text_for_delivery(glyph, delivery, cx);
         // `reset_for_show` clears emoji-search state, so the next open starts on
         // the normal results list rather than back in the grid.
         self.begin_close_transition(LauncherExitIntent::Hide);
@@ -1230,16 +1338,24 @@ impl LauncherView {
             "down" | "arrowdown" => self.move_emoji_search_selection(EMOJI_GRID_COLUMNS as i32, cx),
             "left" | "arrowleft" => self.move_emoji_search_selection(-1, cx),
             "right" | "arrowright" => self.move_emoji_search_selection(1, cx),
-            "enter" | "return" => self.copy_selected_emoji(cx),
+            "enter" | "return" => self.copy_selected_emoji(
+                Delivery::chosen(action_modifier_held(&event.keystroke.modifiers)),
+                cx,
+            ),
             _ => {}
         }
     }
 
-    pub(crate) fn copy_index_to_clipboard(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn deliver_index(
+        &mut self,
+        index: usize,
+        delivery: Delivery,
+        cx: &mut Context<Self>,
+    ) {
         self.selected_index = index;
         self.selection_changed_at = Instant::now();
         self.scroll_result_into_view(self.selected_index, ScrollStrategy::Center);
-        self.copy_selected_to_clipboard(cx);
+        self.deliver_selected(delivery, cx);
     }
 
     pub(crate) fn delete_selected_item(&mut self, cx: &mut Context<Self>) {
@@ -2510,7 +2626,11 @@ impl LauncherView {
         cx.notify();
     }
 
-    pub(crate) fn commit_parameter_fill_prompt(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn commit_parameter_fill_prompt(
+        &mut self,
+        delivery: Delivery,
+        cx: &mut Context<Self>,
+    ) {
         let Some(item_id) = self.parameter_fill_target_id else {
             return;
         };
@@ -2564,10 +2684,7 @@ impl LauncherView {
             }
         };
 
-        self.mark_self_clipboard_write(rendered.as_bytes(), cx);
-        #[cfg(target_os = "linux")]
-        write_clipboard_text(&rendered);
-        cx.write_to_clipboard(ClipboardItem::new_string(rendered));
+        self.pending_paste = self.write_text_for_delivery(&rendered, delivery, cx);
         self.parameter_fill_target_id = None;
         self.parameter_fill_values.clear();
         self.parameter_fill_input_state.reset();
@@ -2631,7 +2748,10 @@ impl LauncherView {
                 return;
             }
             "enter" | "return" => {
-                self.commit_parameter_fill_prompt(cx);
+                self.commit_parameter_fill_prompt(
+                    Delivery::chosen(action_modifier_held(modifiers)),
+                    cx,
+                );
                 return;
             }
             _ => {}
@@ -2862,14 +2982,7 @@ impl LauncherView {
         let modifiers = &event.keystroke.modifiers;
         let no_modifiers = !modifiers.modified();
 
-        // On macOS, Cmd (modifiers.platform) is the action modifier.
-        // On Linux, Ctrl (modifiers.control) is the standard app shortcut
-        // modifier — GPUI maps modifiers.platform to Super/Meta on Linux.
-        let action_mod = if cfg!(target_os = "macos") {
-            modifiers.platform && !modifiers.control
-        } else {
-            modifiers.control && !modifiers.platform
-        };
+        let action_mod = action_modifier_held(modifiers);
 
         let command_navigation =
             action_mod && !modifiers.shift && !modifiers.alt && !modifiers.function;
@@ -2986,7 +3099,7 @@ impl LauncherView {
                     self.export_bowl_from_query(cx);
                     return;
                 }
-                self.copy_selected_to_clipboard(cx);
+                self.deliver_selected(Delivery::chosen(action_mod), cx);
                 return;
             }
             "delete" | "forwarddelete" => {
@@ -4211,5 +4324,51 @@ city = "New York"
         assert_eq!(item.description, "Excluded: secrets are never exported");
         assert!(item.tags.is_empty());
         assert!(item.parameters.is_empty());
+    }
+
+    #[test]
+    fn enter_pastes_only_where_supported_and_unmodified() {
+        assert_eq!(Delivery::for_choice(false, true), Delivery::Paste);
+        assert_eq!(Delivery::for_choice(true, true), Delivery::CopyOnly);
+        assert_eq!(Delivery::for_choice(false, false), Delivery::CopyOnly);
+        assert_eq!(Delivery::for_choice(true, false), Delivery::CopyOnly);
+    }
+
+    #[test]
+    fn palette_offers_paste_above_copy_only_where_supported() {
+        let actions = |supported| {
+            delivery_command_items(supported)
+                .iter()
+                .map(|command| command.action)
+                .collect::<Vec<_>>()
+        };
+        assert!(actions(true) == vec![CommandAction::Paste, CommandAction::Copy]);
+        assert!(actions(false) == vec![CommandAction::Copy]);
+    }
+
+    #[test]
+    fn copy_moves_off_enter_when_paste_takes_it() {
+        assert_eq!(CommandAction::Paste.shortcut_label_for(true), "Enter");
+        assert_eq!(CommandAction::Copy.shortcut_label_for(false), "Enter");
+        let expected = if cfg!(target_os = "macos") {
+            "⌘↩"
+        } else {
+            "Ctrl+Enter"
+        };
+        assert_eq!(CommandAction::Copy.shortcut_label_for(true), expected);
+    }
+
+    #[test]
+    fn action_modifier_is_ctrl_on_linux_and_cmd_on_macos() {
+        let ctrl = gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        };
+        let cmd = gpui::Modifiers {
+            platform: true,
+            ..Default::default()
+        };
+        assert_eq!(action_modifier_held(&ctrl), cfg!(not(target_os = "macos")));
+        assert_eq!(action_modifier_held(&cmd), cfg!(target_os = "macos"));
     }
 }

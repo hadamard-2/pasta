@@ -1,5 +1,5 @@
 use super::actions::{
-    expand_candidates_with_splits, has_structured_parameter_candidates,
+    Delivery, expand_candidates_with_splits, has_structured_parameter_candidates,
     parameter_clickable_candidates,
 };
 use super::query_input::TextInputElement;
@@ -1869,7 +1869,7 @@ impl LauncherView {
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.emoji_search_selected_index = position;
-                this.copy_selected_emoji(cx);
+                this.copy_selected_emoji(Delivery::chosen(false), cx);
             }));
         if is_selected {
             tile = tile
@@ -2524,7 +2524,7 @@ impl LauncherView {
                     let is_double_click =
                         matches!(event, ClickEvent::Mouse(mouse) if mouse.up.click_count >= 2);
                     if is_double_click {
-                        this.copy_index_to_clipboard(ix, cx);
+                        this.deliver_index(ix, Delivery::chosen(false), cx);
                     } else {
                         this.select_result_index(ix, cx);
                     }

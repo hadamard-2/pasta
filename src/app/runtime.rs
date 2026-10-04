@@ -353,6 +353,7 @@ pub(crate) fn spawn_launcher_transition_loop(cx: &mut App) {
 
                         match maybe_exit {
                             Some(LauncherExitIntent::Hide) => {
+                                let paste = view.pending_paste.take();
                                 #[cfg(target_os = "macos")]
                                 {
                                     cx.hide();
@@ -361,6 +362,11 @@ pub(crate) fn spawn_launcher_transition_loop(cx: &mut App) {
                                 {
                                     window.remove_window();
                                     cx.global_mut::<LauncherState>().window = None;
+                                }
+                                // Requested only now, so the focus wait starts
+                                // once the launcher is already going away.
+                                if let Some(ticket) = paste {
+                                    request_paste(ticket, cx);
                                 }
                             }
                             Some(LauncherExitIntent::Quit) => cx.quit(),

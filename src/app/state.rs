@@ -251,6 +251,9 @@ pub(crate) struct LauncherView {
     pub(crate) transition_started_at: Instant,
     pub(crate) transition_duration: Duration,
     pub(crate) pending_exit: Option<LauncherExitIntent>,
+    /// A paste prepared by the last delivery, handed to the platform once the
+    /// launcher has hidden.
+    pub(crate) pending_paste: Option<PasteTicket>,
     pub(crate) revealed_secret_id: Option<i64>,
     pub(crate) reveal_until: Option<Instant>,
     pub(crate) last_reveal_second_bucket: Option<u64>,

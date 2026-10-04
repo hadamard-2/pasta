@@ -6,6 +6,7 @@ mod files;
 mod hotkey;
 mod launch_agent;
 mod menu;
+mod paste;
 mod style;
 mod touch_id;
 mod window;
@@ -28,6 +29,7 @@ pub(crate) use menu::{
     configure_background_mode, setup_status_item, update_brain_menu_state,
     update_launch_at_login_menu_state, update_secret_menu_state,
 };
+pub(crate) use paste::{PasteTicket, begin_paste, paste_supported, request_paste};
 pub(crate) use style::{load_embedded_ui_font, persist_ui_style_state, resolve_font_family};
 pub(crate) use touch_id::authenticate_with_touch_id;
 pub(crate) use window::{create_launcher_window, set_window_move_to_active_space};

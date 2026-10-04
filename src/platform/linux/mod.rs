@@ -38,9 +38,11 @@ mod global_shortcuts;
 mod gnome_bridge;
 mod gnome_bridge_client;
 mod gnome_extension_status;
+mod paste;
 mod polkit;
 
 pub(crate) use global_shortcuts::{PortalOutcome, run_show_launcher_shortcut};
+pub(crate) use paste::{PasteTicket, begin_paste, paste_supported, request_paste};
 
 use wl_clipboard_rs::copy::{MimeType as CopyMimeType, Options as CopyOptions, Source};
 use wl_clipboard_rs::paste::{
