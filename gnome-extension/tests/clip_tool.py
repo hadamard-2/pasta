@@ -167,7 +167,46 @@ def impostor_window(seconds):
     window(seconds)
 
 
+def key_catcher(app_id, seconds):
+    """Show a window under `app_id` that prints each Ctrl+V / Ctrl+Shift+V it receives."""
+
+    def activate(app):
+        win = Gtk.ApplicationWindow(application=app)
+        keys = Gtk.EventControllerKey()
+
+        def pressed(_controller, keyval, _keycode, state):
+            if Gdk.keyval_to_lower(keyval) == Gdk.KEY_v and state & Gdk.ModifierType.CONTROL_MASK:
+                shifted = state & Gdk.ModifierType.SHIFT_MASK
+                print("KEY ctrl+shift+v" if shifted else "KEY ctrl+v", flush=True)
+            return False
+
+        keys.connect("key-pressed", pressed)
+        win.add_controller(keys)
+        win.present()
+        print("WINDOW shown", flush=True)
+        GLib.timeout_add_seconds(int(seconds), lambda: (app.quit(), False)[1])
+
+    app = Gtk.Application(application_id=app_id, flags=Gio.ApplicationFlags.NON_UNIQUE)
+    app.connect("activate", activate)
+    app.run(None)
+
+
+def poke_paste():
+    """Call Paste as a process that is not pasta-launcher."""
+    connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    try:
+        connection.call_sync(
+            "com.pasta.Launcher.ShellBridge", "/com/pasta/Launcher/ShellBridge",
+            "com.pasta.Launcher.ShellBridge1", "Paste",
+            GLib.Variant("(as)", ([],)), None, Gio.DBusCallFlags.NONE, 5000, None)
+        print("POKE accepted", flush=True)
+    except GLib.Error as error:
+        print(f"POKE rejected: {error.message}", flush=True)
+
+
 COMMANDS = {
+    "key-catcher": key_catcher,
+    "poke-paste": poke_paste,
     "set-text": set_text,
     "get-text": get_text,
     "set-file": set_file,

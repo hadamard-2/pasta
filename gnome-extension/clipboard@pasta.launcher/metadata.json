@@ -1,7 +1,7 @@
 {
   "uuid": "clipboard@pasta.launcher",
   "name": "Pasta",
-  "description": "Lets the Pasta clipboard manager see and set the clipboard on GNOME, and keeps Pasta's windows out of the dock, Alt+Tab and the overview.",
+  "description": "Lets the Pasta clipboard manager see, set and paste the clipboard on GNOME, and keeps Pasta's windows out of the dock, Alt+Tab and the overview.",
   "shell-version": ["50"],
-  "version": 2
+  "version": 3
 }

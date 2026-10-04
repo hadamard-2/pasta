@@ -1,5 +1,7 @@
 // Test-only: reports what GNOME Shell's own app and window lists see, so the
-// nested-shell scenarios can check them. Installed only into the test nest.
+// nested-shell scenarios can check them, and gives the headless seat a
+// keyboard. Installed only into the test nest.
+import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -18,6 +20,13 @@ const bump = (counts, pid) => {
 
 export default class PastaTestProbe extends Extension {
     enable() {
+        // A headless shell has no input devices, so its seat offers clients no
+        // keyboard until one appears, and keys pressed before a client has
+        // bound the new keyboard never reach it. A real session always has a
+        // keyboard; stand one in so clients started from now on bind it.
+        this._keyboard = global.stage.context.get_backend().get_default_seat()
+            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+
         this._appStateChanges = {};
         this._everListed = {};
 
@@ -89,5 +98,7 @@ export default class PastaTestProbe extends Extension {
         Gio.bus_unown_name(this._ownerId);
         this._exported.unexport();
         Shell.AppSystem.get_default().disconnect(this._appStateId);
+        this._keyboard.run_dispose();
+        this._keyboard = null;
     }
 }

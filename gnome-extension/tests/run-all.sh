@@ -3,9 +3,9 @@
 # its own fresh isolated GNOME Shell. Local only: needs GNOME Shell 50.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
-cargo build --manifest-path "$HERE/../../Cargo.toml" --bin pasta-launcher --example gnome_bridge_write || exit 1
+cargo build --manifest-path "$HERE/../../Cargo.toml" --bin pasta-launcher --example gnome_bridge_write --example gnome_bridge_paste || exit 1
 failed=0
-for scenario in capture startup write refusals hide; do
+for scenario in capture startup write refusals hide paste; do
     if "$HERE/nested-shell.sh" "$HERE/scenario-$scenario.sh"; then
         :
     else
