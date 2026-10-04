@@ -826,33 +826,70 @@ fn spawn_serial_worker<J: Send + 'static>(
 
 fn bridge_jobs() -> Option<&'static mpsc::Sender<BridgeJob>> {
     static JOBS: OnceLock<Option<mpsc::Sender<BridgeJob>>> = OnceLock::new();
-    JOBS.get_or_init(
-        || match spawn_serial_worker("pasta-gnome-bridge", run_bridge_job) {
+    JOBS.get_or_init(|| {
+        let mut worker = BridgeWorker::new();
+        match spawn_serial_worker("pasta-gnome-bridge", move |job| {
+            run_bridge_job(&mut worker, job)
+        }) {
             Ok(jobs) => Some(jobs),
             Err(err) => {
                 eprintln!("warning: could not start the GNOME bridge worker thread: {err}");
                 None
             }
-        },
-    )
+        }
+    })
     .as_ref()
+}
+
+/// Remembers whether the last write succeeded, so a paste queued behind a
+/// failed write is skipped rather than pasting stale clipboard content.
+struct BridgeWorker {
+    last_write_ok: bool,
+}
+
+impl BridgeWorker {
+    fn new() -> Self {
+        Self {
+            last_write_ok: true,
+        }
+    }
+
+    fn handle(
+        &mut self,
+        job: BridgeJob,
+        write: impl FnOnce(&str, Vec<u8>) -> Result<(), String>,
+        paste: impl FnOnce() -> Result<(), String>,
+    ) {
+        match job {
+            BridgeJob::Write { mimetype, bytes } => {
+                let result = write(&mimetype, bytes);
+                self.last_write_ok = result.is_ok();
+                if let Err(err) = result {
+                    eprintln!("warning: GNOME clipboard write of {mimetype} failed: {err}");
+                }
+            }
+            BridgeJob::Paste => {
+                if !self.last_write_ok {
+                    eprintln!("warning: paste skipped: clipboard write failed");
+                } else if let Err(err) = paste() {
+                    eprintln!("warning: paste skipped: {err}");
+                }
+                self.last_write_ok = true;
+            }
+        }
+    }
 }
 
 /// Bridge calls wait for the shell (to read a payload, or to find a window to
 /// paste into), so they run here, off the UI thread.
-fn run_bridge_job(job: BridgeJob) {
-    match job {
-        BridgeJob::Write { mimetype, bytes } => {
-            if let Err(err) = gnome_bridge_client::set_clipboard(&mimetype, bytes) {
-                eprintln!("warning: GNOME clipboard write of {mimetype} failed: {err}");
-            }
-        }
-        BridgeJob::Paste => {
-            if let Err(err) = gnome_bridge_client::paste(paste::TERMINAL_APP_IDS) {
-                eprintln!("warning: paste skipped: {err}");
-            }
-        }
-    }
+fn run_bridge_job(worker: &mut BridgeWorker, job: BridgeJob) {
+    worker.handle(
+        job,
+        |mimetype, bytes| {
+            gnome_bridge_client::set_clipboard(mimetype, bytes).map_err(|err| err.to_string())
+        },
+        || gnome_bridge_client::paste(paste::TERMINAL_APP_IDS).map_err(|err| err.to_string()),
+    );
 }
 
 fn queue_bridge_job(job: BridgeJob) {
@@ -2865,5 +2902,59 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    fn write_job() -> BridgeJob {
+        BridgeJob::Write {
+            mimetype: "text/plain".to_owned(),
+            bytes: b"x".to_vec(),
+        }
+    }
+
+    #[test]
+    fn paste_after_a_failed_write_is_skipped() {
+        let mut worker = BridgeWorker::new();
+        let mut pasted = false;
+        worker.handle(write_job(), |_, _| Err("boom".to_owned()), || Ok(()));
+        worker.handle(
+            BridgeJob::Paste,
+            |_, _| Ok(()),
+            || {
+                pasted = true;
+                Ok(())
+            },
+        );
+        assert!(!pasted);
+    }
+
+    #[test]
+    fn paste_after_a_successful_write_runs() {
+        let mut worker = BridgeWorker::new();
+        let mut pasted = false;
+        worker.handle(write_job(), |_, _| Ok(()), || Ok(()));
+        worker.handle(
+            BridgeJob::Paste,
+            |_, _| Ok(()),
+            || {
+                pasted = true;
+                Ok(())
+            },
+        );
+        assert!(pasted);
+    }
+
+    #[test]
+    fn paste_with_no_preceding_write_runs() {
+        let mut worker = BridgeWorker::new();
+        let mut pasted = false;
+        worker.handle(
+            BridgeJob::Paste,
+            |_, _| Ok(()),
+            || {
+                pasted = true;
+                Ok(())
+            },
+        );
+        assert!(pasted);
     }
 }

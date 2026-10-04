@@ -1,4 +1,4 @@
-// Accepts clipboard writes from Pasta over D-Bus and applies them with St.Clipboard.
+// Accepts clipboard writes and paste requests from Pasta over D-Bus. Writes go through St.Clipboard; pastes press the shortcut through a virtual keyboard.
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GioUnix from 'gi://GioUnix';
@@ -73,6 +73,7 @@ export class ShellBridge {
     constructor() {
         this._keyboard = null;
         this._focusWaits = new Set();
+        this._destroyed = false;
         this._exported = Gio.DBusExportedObject.wrapJSObject(BRIDGE_XML, this);
         this._exported.export(Gio.DBus.session, BRIDGE_PATH);
         this._nameId = Gio.bus_own_name_on_connection(
@@ -161,7 +162,15 @@ export class ShellBridge {
                 `${exe} is not ${ALLOWED_CALLER_EXE}`);
             return;
         }
+        if (this._destroyed) {
+            this._failShuttingDown(invocation);
+            return;
+        }
         const window = await this._focusAwayFrom(callerPid);
+        if (this._destroyed) {
+            this._failShuttingDown(invocation);
+            return;
+        }
         if (!window) {
             invocation.return_dbus_error('org.freedesktop.DBus.Error.Failed',
                 `no window other than the caller's took focus within ${FOCUS_TIMEOUT_MS} ms`);
@@ -175,6 +184,10 @@ export class ShellBridge {
         invocation.return_value(null);
     }
 
+    _failShuttingDown(invocation) {
+        invocation.return_dbus_error('org.freedesktop.DBus.Error.Failed', 'bridge is shutting down');
+    }
+
     /** Resolves with the focused window once it is not `pid`'s, or with null after FOCUS_TIMEOUT_MS. */
     _focusAwayFrom(pid) {
         const display = global.display;
@@ -182,6 +195,8 @@ export class ShellBridge {
             const window = display.focus_window;
             return window && window.get_pid() !== pid ? window : null;
         };
+        if (this._destroyed)
+            return Promise.resolve(null);
         const now = usable();
         if (now)
             return Promise.resolve(now);
@@ -213,6 +228,8 @@ export class ShellBridge {
 
     /** Presses `keyvals` in order and releases them in reverse, through a virtual keyboard. */
     _press(keyvals) {
+        if (this._destroyed)
+            return;
         if (!this._keyboard) {
             const seat = global.stage.context.get_backend().get_default_seat();
             this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
@@ -225,6 +242,7 @@ export class ShellBridge {
     }
 
     destroy() {
+        this._destroyed = true;
         for (const finish of [...this._focusWaits])
             finish(null);
         this._keyboard?.run_dispose();

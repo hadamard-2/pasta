@@ -93,8 +93,9 @@ pub(super) fn keycode_for_keysym(
 
 /// Waits until the CLIPBOARD owner is no longer `owner_before` and a window
 /// that is not this process's is active, then presses the paste shortcut
-/// there with XTest. The platform clipboard write hands ownership to a forked
-/// helper process after it has returned, which is why the owner is waited for.
+/// there with XTest. The platform clipboard write may complete after it has
+/// returned, so the paste waits for the CLIPBOARD owner to change before
+/// pressing any keys.
 pub(super) fn paste(owner_before: Window) -> Result<(), String> {
     let (conn, screen_num) = x11rb::connect(None).map_err(|err| err.to_string())?;
     let root = conn.setup().roots[screen_num].root;
