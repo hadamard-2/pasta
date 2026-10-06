@@ -13,6 +13,10 @@ const BRIDGE_PATH = '/com/pasta/Launcher/ShellBridge';
 const ALLOWED_CALLER_EXE = 'pasta-launcher';
 const MAX_BYTES = 32 * 1024 * 1024;
 const FOCUS_TIMEOUT_MS = 1000;
+// How long a window must have held focus before it gets the keys. Measured:
+// a terminal handed the shortcut within a few ms of taking focus often pasted
+// nothing; 50 ms and 150 ms always pasted.
+const FOCUS_SETTLE_MS = 100;
 const BRIDGE_XML = `<node>
   <interface name="com.pasta.Launcher.ShellBridge1">
     <method name="SetClipboard">
@@ -73,7 +77,12 @@ export class ShellBridge {
     constructor() {
         this._keyboard = null;
         this._focusWaits = new Set();
+        this._settleTimers = new Map();
         this._destroyed = false;
+        this._focusChangedAt = GLib.get_monotonic_time();
+        this._focusChangedId = global.display.connect('notify::focus-window', () => {
+            this._focusChangedAt = GLib.get_monotonic_time();
+        });
         this._exported = Gio.DBusExportedObject.wrapJSObject(BRIDGE_XML, this);
         this._exported.export(Gio.DBus.session, BRIDGE_PATH);
         this._nameId = Gio.bus_own_name_on_connection(
@@ -176,6 +185,18 @@ export class ShellBridge {
                 `no window other than the caller's took focus within ${FOCUS_TIMEOUT_MS} ms`);
             return;
         }
+        const heldMs = (GLib.get_monotonic_time() - this._focusChangedAt) / 1000;
+        if (heldMs < FOCUS_SETTLE_MS)
+            await this._settle(Math.ceil(FOCUS_SETTLE_MS - heldMs));
+        if (this._destroyed) {
+            this._failShuttingDown(invocation);
+            return;
+        }
+        if (global.display.focus_window !== window) {
+            invocation.return_dbus_error('org.freedesktop.DBus.Error.Failed',
+                `focus moved within ${FOCUS_SETTLE_MS} ms of reaching the window to paste into`);
+            return;
+        }
         const appId = (window.get_wm_class() ?? '').toLowerCase();
         const terminal = terminalAppIds.some(id => id.toLowerCase() === appId);
         this._press(terminal
@@ -226,6 +247,18 @@ export class ShellBridge {
         });
     }
 
+    /** Resolves after `ms`, or as soon as the bridge is destroyed. */
+    _settle(ms) {
+        return new Promise(resolve => {
+            const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+                this._settleTimers.delete(id);
+                resolve();
+                return GLib.SOURCE_REMOVE;
+            });
+            this._settleTimers.set(id, resolve);
+        });
+    }
+
     /** Presses `keyvals` in order and releases them in reverse, through a virtual keyboard. */
     _press(keyvals) {
         if (this._destroyed)
@@ -245,6 +278,12 @@ export class ShellBridge {
         this._destroyed = true;
         for (const finish of [...this._focusWaits])
             finish(null);
+        for (const [id, resolve] of [...this._settleTimers]) {
+            GLib.source_remove(id);
+            resolve();
+        }
+        this._settleTimers.clear();
+        global.display.disconnect(this._focusChangedId);
         this._keyboard?.run_dispose();
         this._keyboard = null;
         Gio.bus_unown_name(this._nameId);

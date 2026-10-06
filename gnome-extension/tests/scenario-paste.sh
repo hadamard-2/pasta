@@ -1,7 +1,8 @@
 #!/bin/sh
 # The bridge presses the paste shortcut in the focused window: Ctrl+V in an
 # ordinary app, Ctrl+Shift+V in one the caller lists as a terminal. It gives
-# up when no other window takes focus and refuses callers that are not Pasta.
+# up when no other window takes focus, waits until a window that has just
+# taken focus has held it for 100 ms, and refuses callers that are not Pasta.
 set -eu
 . "$HERE/lib.sh"
 
@@ -44,7 +45,24 @@ refute_line "$NEST/terminal.log" "^KEY ctrl\+v$"
 kill "$CATCHER_PID" 2>/dev/null || true
 wait "$CATCHER_PID" 2>/dev/null || true
 
-# 4. A caller that is not pasta-launcher is refused.
+# 4. A window that takes focus while Paste is waiting gets the keys no sooner
+#    than 100 ms after it did. Its own focus-in is seen slightly after the
+#    shell moved focus, hence the lower bound of 80 ms.
+cp "$REPO_ROOT/target/debug/examples/gnome_bridge_paste" "$NEST/writer/pasta-launcher"
+"$NEST/writer/pasta-launcher" dev.pasta.FakeTerminal >"$NEST/settle-paste.out" 2>&1 &
+PASTE_PID=$!
+python3 "$HERE/clip_tool.py" key-catcher dev.pasta.KeyCatcher 15 >"$NEST/settle.log" 2>&1 &
+CATCHER_PID=$!
+wait "$PASTE_PID" || { echo "FAIL paste said: $(cat "$NEST/settle-paste.out")"; exit 1; }
+wait_for_line "$NEST/settle.log" "^KEY ctrl\+v$" 5
+focus_us=$(sed -n 's/^AT focus //p' "$NEST/settle.log" | tail -n 1)
+key_us=$(sed -n 's/^AT key //p' "$NEST/settle.log" | head -n 1)
+gap_ms=$(( (key_us - focus_us) / 1000 ))
+[ "$gap_ms" -ge 80 ] || { echo "FAIL keys arrived ${gap_ms} ms after focus; expected at least 80"; exit 1; }
+kill "$CATCHER_PID" 2>/dev/null || true
+wait "$CATCHER_PID" 2>/dev/null || true
+
+# 5. A caller that is not pasta-launcher is refused.
 poke=$(python3 "$HERE/clip_tool.py" poke-paste)
 case "$poke" in
     "POKE rejected:"*) ;;

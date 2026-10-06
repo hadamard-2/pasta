@@ -42,7 +42,7 @@ Current baseline:
 - Copy a text item and an image item back out of history and paste them into another app.
 - With secret auto-clear enabled, copy a secret from history and confirm the clipboard is empty about 30 seconds later.
 - Disable the extension in GNOME's Extensions app and confirm the banner returns with **Enable**.
-- After upgrading to extension version 3 and logging out and back in, confirm Enter pastes; before the re-login, confirm Enter still copies and Pasta's log shows `paste skipped`.
+- After upgrading to extension version 4 and logging out and back in, confirm Enter pastes, including several times in a row into GNOME Terminal and an Electron app (e.g. Claude Desktop). Coming from version 2, confirm before the re-login that Enter still copies and Pasta's log shows `paste skipped`.
 
 ### GNOME (Wayland)
 

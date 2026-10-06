@@ -168,20 +168,27 @@ def impostor_window(seconds):
 
 
 def key_catcher(app_id, seconds):
-    """Show a window under `app_id` that prints each Ctrl+V / Ctrl+Shift+V it receives."""
+    """Show a window under `app_id` that prints each Ctrl+V / Ctrl+Shift+V it receives,
+    and the monotonic time (µs) at which it gained focus and saw each one."""
 
     def activate(app):
         win = Gtk.ApplicationWindow(application=app)
         keys = Gtk.EventControllerKey()
 
+        def active_changed(window, _pspec):
+            if window.is_active():
+                print(f"AT focus {GLib.get_monotonic_time()}", flush=True)
+
         def pressed(_controller, keyval, _keycode, state):
             if Gdk.keyval_to_lower(keyval) == Gdk.KEY_v and state & Gdk.ModifierType.CONTROL_MASK:
+                print(f"AT key {GLib.get_monotonic_time()}", flush=True)
                 shifted = state & Gdk.ModifierType.SHIFT_MASK
                 print("KEY ctrl+shift+v" if shifted else "KEY ctrl+v", flush=True)
             return False
 
         keys.connect("key-pressed", pressed)
         win.add_controller(keys)
+        win.connect("notify::is-active", active_changed)
         win.present()
         print("WINDOW shown", flush=True)
         GLib.timeout_add_seconds(int(seconds), lambda: (app.quit(), False)[1])
