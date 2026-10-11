@@ -139,6 +139,8 @@ Two cooperating pieces in `src/platform/linux/mod.rs`, wired from the Linux `mai
 
 `main()` flow: try the lock. If we got it, we're the instance — run normally. If not, another instance is running, so signal it to show its launcher over the socket and exit. This covers both a plain re-launch and `pasta-launcher --show`, so re-launching always surfaces the existing window instead of starting a second copy. `--show` starts a fresh instance if none is running. The listener clears a stale socket file before binding.
 
+`--background` is the exception: the instance it starts skips the startup `show_launcher`, and if another instance holds the lock it exits without sending the show request. The autostart entry (`~/.config/autostart/com.pasta.launcher.desktop`) runs with it so a login start stays in the tray; `ensure_launch_agent_registered` rewrites an existing entry on the next start, so entries from older builds pick up the flag without re-toggling Launch at Login.
+
 ## Pasta Brain (neural search)
 
 "Pasta Brain" is the semantic/neural search feature: on-device embeddings via `fastembed` + `ort` (ONNX Runtime), model all-MiniLM-L6-v2. It is **disabled by default** (`default_pasta_brain_enabled`, and the fresh-install defaults in `default_ui_style_state` on both platforms). Two important details: the startup init (`spawn_neural_init`) is **gated on the `pasta_brain_enabled` flag** so a disabled brain never downloads the ~90 MB model or spins up the CPU-heavy ONNX session (this was the cause of fans spinning on launch); and turning it on from the tray now triggers `spawn_neural_init` itself (the `SetPastaBrain(true)` handler in `runtime.rs`), so enabling doesn't need a separate "Download model" step.

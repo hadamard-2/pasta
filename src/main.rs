@@ -660,8 +660,11 @@ fn main() {
     // a plain re-launch and `pasta --show` bound to a desktop keyboard shortcut
     // — then exit instead of starting a second copy. Only the lock holder goes
     // on to run the app and bind the trigger socket.
+    // A background start (the login autostart entry) only makes sure Pasta is
+    // running: it never opens the launcher, here or in an existing instance.
+    let start_in_background = started_in_background();
     if !acquire_single_instance_lock() {
-        if !send_show_trigger() {
+        if !start_in_background && !send_show_trigger() {
             eprintln!(
                 "warning: another Pasta instance is running but did not respond on the trigger socket"
             );
@@ -669,7 +672,7 @@ fn main() {
         return;
     }
 
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
+    Application::new().with_assets(Assets).run(move |cx: &mut App| {
         let (menu_tx, menu_rx) = mpsc::channel::<MenuCommand>();
         let _ = MENU_COMMAND_TX.set(menu_tx);
 
@@ -771,6 +774,8 @@ fn main() {
         spawn_launcher_transition_loop(cx);
         spawn_clipboard_watcher(cx);
 
-        show_launcher(cx);
+        if !start_in_background {
+            show_launcher(cx);
+        }
     });
 }

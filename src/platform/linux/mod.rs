@@ -1147,6 +1147,17 @@ fn remove_if_present(path: &std::path::Path) -> std::io::Result<()> {
     }
 }
 
+/// Passed by the autostart entry so a login start stays in the tray instead of
+/// opening the launcher. Launching an already-running instance with it is a
+/// no-op rather than a show request.
+pub(crate) const BACKGROUND_START_FLAG: &str = "--background";
+
+pub(crate) fn started_in_background() -> bool {
+    std::env::args()
+        .skip(1)
+        .any(|arg| arg == BACKGROUND_START_FLAG)
+}
+
 fn render_autostart_entry() -> String {
     let exe_path = std::env::current_exe()
         .map(|p| p.display().to_string())
@@ -1156,7 +1167,7 @@ fn render_autostart_entry() -> String {
          Type=Application\n\
          Name=Pasta\n\
          Comment=Clipboard manager for devs and devops\n\
-         Exec={exe_path}\n\
+         Exec={exe_path} {BACKGROUND_START_FLAG}\n\
          Terminal=false\n\
          StartupNotify=false\n\
          X-GNOME-Autostart-enabled=true\n"
@@ -2688,6 +2699,16 @@ fn write_via_command_bytes(program: &str, args: &[&str], value: &[u8]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autostart_entry_starts_in_background() {
+        let entry = render_autostart_entry();
+        let exec = entry
+            .lines()
+            .find(|line| line.starts_with("Exec="))
+            .expect("autostart entry has an Exec line");
+        assert!(exec.ends_with(&format!(" {BACKGROUND_START_FLAG}")));
+    }
 
     #[test]
     fn x11_sessions_use_the_x11_path() {
