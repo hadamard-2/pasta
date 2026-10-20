@@ -35,7 +35,12 @@ fn build_emoji_entries() -> Vec<EmojiEntry> {
         .map(|emoji| {
             let name = emoji.name().to_string();
             let mut keywords: Vec<String> = emoji.shortcodes().map(str::to_owned).collect();
-            if let Some(extra) = cldr_keywords.get(emoji.as_str()) {
+            // CLDR keys omit the U+FE0F variation selector that the crate
+            // spells text-default emoji with (`❤` vs `❤️`).
+            let extra = cldr_keywords
+                .get(emoji.as_str())
+                .or_else(|| cldr_keywords.get(emoji.as_str().replace('\u{fe0f}', "").as_str()));
+            if let Some(extra) = extra {
                 for keyword in extra {
                     if !keywords.contains(keyword) {
                         keywords.push(keyword.clone());
@@ -543,6 +548,15 @@ mod tests {
             assert!(!glyphs.contains(&emoji), "{emoji} is emoji, not a symbol");
         }
         assert!(SYMBOL_ENTRIES.iter().all(|entry| !entry.name.is_empty()));
+    }
+
+    #[test]
+    fn emoji_keywords_include_cldr_annotations_for_variation_selector_emoji() {
+        let heart = EMOJI_ENTRIES
+            .iter()
+            .find(|entry| entry.glyph == "❤\u{fe0f}")
+            .expect("red heart is in the emoji corpus");
+        assert!(heart.keywords.iter().any(|keyword| keyword == "love"));
     }
 
     #[test]
