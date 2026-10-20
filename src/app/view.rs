@@ -16,21 +16,17 @@ const SECRET_PILL_WIDTH: f32 = 60.0;
 /// Wide enough for an "HH:MM" recency label at 11px.
 const RECENCY_LABEL_WIDTH: f32 = 34.0;
 
-/// The visual for a single emoji tile. On Linux the glyph is rendered from its
-/// bundled Noto Color Emoji PNG (keyed by codepoints joined with `-`, served by
-/// `Assets`), which sidesteps cosmic-text/GPUI's color-emoji font-fallback
-/// limitations; a missing image falls back to the text glyph. Other platforms
-/// render the text glyph directly, since they draw color emoji natively.
+/// The visual for a single emoji tile. On Linux the glyph is rendered from an
+/// image served by `Assets` — the user's chosen emoji font when one is set,
+/// otherwise the bundled Noto Color Emoji PNG — which sidesteps
+/// cosmic-text/GPUI's color-emoji font-fallback limitations; a missing image
+/// falls back to the text glyph. Other platforms render the text glyph
+/// directly, since they draw color emoji natively.
 fn emoji_tile_glyph(glyph: &str) -> AnyElement {
     #[cfg(target_os = "linux")]
     {
-        let key = glyph
-            .chars()
-            .map(|c| format!("{:x}", c as u32))
-            .collect::<Vec<_>>()
-            .join("-");
         let fallback_glyph = glyph.to_owned();
-        img(format!("emoji/{key}.png"))
+        img(crate::platform::emoji_font::emoji_image_path(glyph))
             .w(px(40.0))
             .h(px(40.0))
             .object_fit(ObjectFit::Contain)

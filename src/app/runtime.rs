@@ -184,6 +184,10 @@ fn handle_menu_command(command: MenuCommand, cx: &mut App) {
         MenuCommand::NeuralStatusChanged => {
             update_brain_menu_state(cx);
         }
+        #[cfg(target_os = "linux")]
+        MenuCommand::ChooseEmojiFont => choose_emoji_font_in_background(),
+        #[cfg(target_os = "linux")]
+        MenuCommand::SetEmojiFont(path) => apply_emoji_font(cx, path),
         MenuCommand::RequestClearHistory => {
             #[cfg(target_os = "macos")]
             {

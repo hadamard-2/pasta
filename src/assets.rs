@@ -9,8 +9,10 @@ pub(crate) struct Assets;
 
 /// The emoji picker renders each glyph from a bundled Noto Color Emoji PNG
 /// (keyed by the glyph's codepoints joined with `-`), sidestepping the Linux
-/// cosmic-text/GPUI color-emoji font-fallback limitations. Linux-only —
-/// macOS renders emoji natively and embeds none of this.
+/// cosmic-text/GPUI color-emoji font-fallback limitations, unless the user
+/// picked their own emoji font (`emoji-font/` paths, see
+/// `platform::emoji_font`). Linux-only — macOS renders emoji natively and
+/// embeds none of this.
 #[cfg(target_os = "linux")]
 #[derive(rust_embed::RustEmbed)]
 #[folder = "assets/emoji/png"]
@@ -21,6 +23,13 @@ impl AssetSource for Assets {
         #[cfg(target_os = "linux")]
         if let Some(name) = path.strip_prefix("emoji/") {
             return Ok(EmojiPngs::get(name).map(|file| file.data));
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(rest) = path.strip_prefix("emoji-font/") {
+            return Ok(crate::platform::emoji_font::load_emoji_image(
+                rest,
+                |name| EmojiPngs::get(name).map(|file| file.data),
+            ));
         }
         match path {
             "icons/search.svg" => Ok(Some(Cow::Borrowed(

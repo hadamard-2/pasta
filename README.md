@@ -33,6 +33,7 @@ Paste smarter — search, transform, parametrize, and organize everything you co
 - **Parametrize snippets** — turn any copied command into a reusable template with `{{placeholders}}`, filled in on paste. `Cmd + click` to sub-split tokens like `deployment/checkout-api`.
 - **Pasta Bowls** — organize clips into tagged collections; export and import as YAML to share with your team.
 - **Secrets** — AES-256-GCM encrypted, stored in the macOS Keychain, masked in the UI until revealed.
+- **Emoji & symbol pickers** — type `e` or `s` to search emoji, or typographic symbols you can't type (en dash, interpunct, `≠`, `→`). On Linux, *Preferences → Emoji Font* points the emoji picker at any bitmap emoji font file you already have (`sbix` or `CBDT`); Pasta reads the images from your file and bundles none of that artwork.
 - **Syntax highlighting** out of the box for Bash, JSON, YAML, TOML, Python, Rust, Go, SQL, and [many more](https://github.com/sublimehq/Packages).
 - **Native** — glassmorphic UI, dark/light auto, GPU-accelerated rendering. No Electron, no web views. Global hotkey: `Option + Space` on macOS, `Meta + V` on Linux.
 

@@ -136,6 +136,10 @@ pub(crate) struct UiStyleState {
     pub surface_alpha: f32,
     pub secret_auto_clear: bool,
     pub pasta_brain_enabled: bool,
+    /// The user's chosen emoji font for the picker; `None` uses the bundled
+    /// Noto images. Linux-only: macOS draws emoji natively.
+    #[cfg(target_os = "linux")]
+    pub emoji_font_path: Option<PathBuf>,
 }
 
 impl Global for UiStyleState {}
@@ -146,6 +150,9 @@ pub(crate) struct PersistedUiStyleState {
     pub(crate) secret_auto_clear: bool,
     #[serde(default = "default_pasta_brain_enabled")]
     pub(crate) pasta_brain_enabled: bool,
+    #[cfg(target_os = "linux")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) emoji_font_path: Option<PathBuf>,
 }
 
 fn default_pasta_brain_enabled() -> bool {
@@ -186,7 +193,7 @@ pub(crate) enum CaptureFixAction {
     EnableGnomeExtension,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum MenuCommand {
     ShowLauncher,
     QuitApp,
@@ -201,6 +208,12 @@ pub(crate) enum MenuCommand {
     RequestClearHistory,
     PerformClearHistory,
     ToggleLaunchAtLogin,
+    /// Open a file picker for the emoji picker's font.
+    #[cfg(target_os = "linux")]
+    ChooseEmojiFont,
+    /// Use this emoji font file, or the bundled emoji images for `None`.
+    #[cfg(target_os = "linux")]
+    SetEmojiFont(Option<PathBuf>),
     /// The reason clipboard capture is unavailable (or its fix) changed.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     ClipboardCaptureStatusChanged,

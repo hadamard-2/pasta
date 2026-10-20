@@ -115,6 +115,13 @@ Current baseline:
 - Reopen the launcher and confirm it comes back to the normal results list, not the emoji grid.
 - Confirm the picked emoji did **not** create a clipboard history entry.
 
+### Emoji Font (Linux)
+
+- From the tray, choose *Preferences → Emoji Font → Choose Font File…*, pick a bitmap emoji font (e.g. an Apple Color Emoji `.ttf`), and confirm a notification says the picker now uses it.
+- Open the emoji picker and confirm the tiles show that font's artwork, including flags, skin tones and family (ZWJ) emoji; any emoji the font lacks shows the bundled Noto image.
+- Choose a non-emoji font (e.g. a regular text `.ttf`) and confirm a "Couldn't use that emoji font" notification and that the previous font stays in use.
+- Quit and relaunch and confirm the chosen font is still used; switch back with *Default (Noto Color Emoji)* and confirm the picker returns to the bundled images.
+
 ### Symbol Picker
 
 - Type `s` to surface the symbol affordance and enter the picker.

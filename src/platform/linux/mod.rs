@@ -34,6 +34,7 @@ use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_device_v1
 };
 use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1;
 use wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_offer_v1::ZwlrDataControlOfferV1;
+pub(crate) mod emoji_font;
 mod global_shortcuts;
 mod gnome_bridge;
 mod gnome_bridge_client;
@@ -1251,6 +1252,8 @@ struct PastaTray {
     pasta_brain_enabled: bool,
     neural_status: NeuralStatus,
     launch_at_login_enabled: bool,
+    /// File name of the emoji font in use, `None` for the bundled emoji.
+    emoji_font_name: Option<String>,
 }
 
 impl PastaTray {
@@ -1259,7 +1262,54 @@ impl PastaTray {
         self.pasta_brain_enabled = style.pasta_brain_enabled;
         self.neural_status = neural_status;
         self.launch_at_login_enabled = launch_agent_is_installed();
+        self.emoji_font_name = active_emoji_font_name();
     }
+
+    fn emoji_font_menu(&self) -> MenuItem<Self> {
+        let mut submenu: Vec<MenuItem<Self>> = vec![
+            CheckmarkItem {
+                label: "Default (Noto Color Emoji)".into(),
+                checked: self.emoji_font_name.is_none(),
+                activate: Box::new(|tray: &mut Self| {
+                    tray.emoji_font_name = None;
+                    let _ = tray.menu_tx.send(MenuCommand::SetEmojiFont(None));
+                }),
+                ..Default::default()
+            }
+            .into(),
+        ];
+        if let Some(name) = &self.emoji_font_name {
+            submenu.push(
+                CheckmarkItem {
+                    label: name.clone(),
+                    checked: true,
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+        submenu.push(MenuItem::Separator);
+        submenu.push(
+            StandardItem {
+                label: "Choose Font File…".into(),
+                activate: Box::new(|tray: &mut Self| {
+                    let _ = tray.menu_tx.send(MenuCommand::ChooseEmojiFont);
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        SubMenu {
+            label: "Emoji Font".into(),
+            submenu,
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
+fn active_emoji_font_name() -> Option<String> {
+    emoji_font::active_emoji_font().map(|font| font.display_name())
 }
 
 impl Tray for PastaTray {
@@ -1388,6 +1438,7 @@ impl Tray for PastaTray {
                         ..Default::default()
                     }
                     .into(),
+                    self.emoji_font_menu(),
                 ],
                 ..Default::default()
             }
@@ -1453,6 +1504,7 @@ pub(crate) fn setup_status_item(cx: &mut App) {
         pasta_brain_enabled: style.pasta_brain_enabled,
         neural_status,
         launch_at_login_enabled: launch_agent_is_installed(),
+        emoji_font_name: active_emoji_font_name(),
     };
 
     match tray.assume_sni_available(true).spawn() {
@@ -1544,6 +1596,7 @@ fn default_ui_style_state(
         surface_alpha: 1.00,
         secret_auto_clear: true,
         pasta_brain_enabled: false,
+        emoji_font_path: None,
     }
 }
 
@@ -1576,6 +1629,7 @@ fn load_ui_style_state(
     style.surface_alpha = persisted.surface_alpha.clamp(0.45, 1.0);
     style.secret_auto_clear = persisted.secret_auto_clear;
     style.pasta_brain_enabled = persisted.pasta_brain_enabled;
+    style.emoji_font_path = persisted.emoji_font_path;
     style
 }
 
@@ -1588,6 +1642,7 @@ fn save_ui_style_state(style: &UiStyleState) {
         surface_alpha: style.surface_alpha.clamp(0.45, 1.0),
         secret_auto_clear: style.secret_auto_clear,
         pasta_brain_enabled: style.pasta_brain_enabled,
+        emoji_font_path: style.emoji_font_path.clone(),
     }) {
         Ok(serialized) => serialized,
         Err(err) => {
@@ -1622,7 +1677,71 @@ pub(crate) fn load_embedded_ui_font(cx: &mut App) {
     let ui_font_family = resolve_font_family(cx, &["Geist"]).unwrap_or_else(|| "Geist".into());
     let content_font_family = resolve_font_family(cx, &["Geist Mono", "GeistMono"])
         .unwrap_or_else(|| "Geist Mono".into());
-    cx.set_global(load_ui_style_state(ui_font_family, content_font_family));
+    let style = load_ui_style_state(ui_font_family, content_font_family);
+    if let Some(path) = &style.emoji_font_path {
+        // Keep the saved path even when it fails to open (e.g. on an unmounted
+        // drive) so the next launch retries it; this session uses the bundled
+        // emoji meanwhile.
+        match emoji_font::EmojiFont::open(path) {
+            Ok(font) => emoji_font::set_active_emoji_font(Some(font)),
+            Err(err) => eprintln!(
+                "warning: emoji font '{}' unavailable, using bundled emoji: {err}",
+                path.display()
+            ),
+        }
+    }
+    cx.set_global(style);
+}
+
+/// Opens the emoji-font file picker off the UI thread (the portal dialog
+/// blocks its caller) and routes the pick back as `SetEmojiFont`.
+pub(crate) fn choose_emoji_font_in_background() {
+    let Some(menu_tx) = MENU_COMMAND_TX.get().cloned() else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("pasta-emoji-font-picker".to_owned())
+        .spawn(move || {
+            let picked = FileDialog::new()
+                .set_title("Choose an emoji font")
+                .add_filter("Fonts", &["ttf", "otf", "ttc"])
+                .pick_file();
+            if let Some(path) = picked {
+                let _ = menu_tx.send(MenuCommand::SetEmojiFont(Some(path)));
+            }
+        });
+    if let Err(err) = spawned {
+        eprintln!("warning: unable to open the emoji font picker: {err}");
+    }
+}
+
+/// Switches the emoji picker to the font at `path`, or back to the bundled
+/// emoji for `None`. A font that fails to open leaves the current one in
+/// place and tells the user why.
+pub(crate) fn apply_emoji_font(cx: &mut App, path: Option<PathBuf>) {
+    match path {
+        Some(path) => match emoji_font::EmojiFont::open(&path) {
+            Ok(font) => {
+                let name = font.display_name();
+                emoji_font::set_active_emoji_font(Some(font));
+                cx.global_mut::<UiStyleState>().emoji_font_path = Some(path);
+                show_macos_notification(
+                    "Emoji font set",
+                    &format!("The emoji picker now uses {name}."),
+                );
+            }
+            Err(err) => {
+                show_macos_notification("Couldn't use that emoji font", &err.to_string());
+                return;
+            }
+        },
+        None => {
+            emoji_font::set_active_emoji_font(None);
+            cx.global_mut::<UiStyleState>().emoji_font_path = None;
+        }
+    }
+    persist_ui_style_state(cx);
+    update_brain_menu_state(cx);
 }
 
 /// Resolve a bundled font's family name via best-effort matching against the

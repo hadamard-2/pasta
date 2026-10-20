@@ -103,6 +103,11 @@ evdev = "0.12.2"
 # picker's image-based rendering. Linux-only: macOS renders emoji natively via
 # CoreText and needs neither the images nor the weight.
 rust-embed = "8"
+# Read a user-chosen color-emoji font's embedded bitmaps for the emoji
+# picker (`platform/linux/emoji_font.rs`). Both already sit in the tree
+# under gpui's text stack.
+memmap2 = "0.9"
+rustybuzz = "0.20"
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland", "x11"] }
 keyring = { version = "3.6.2", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 nix = "0.23.2"
