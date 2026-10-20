@@ -295,10 +295,11 @@ pub(crate) struct LauncherView {
     pub(crate) command_palette_selected: usize,
     pub(crate) caret_visible: bool,
     pub(crate) caret_blink_due_at: Instant,
-    pub(crate) emoji_search_active: bool,
-    pub(crate) emoji_search_results: Vec<usize>,
-    pub(crate) emoji_search_selected_index: usize,
-    pub(crate) emoji_results_scroll: UniformListScrollHandle,
+    /// The emoji or symbol grid, when it has replaced the results list.
+    pub(crate) glyph_picker: Option<emoji::GlyphPicker>,
+    pub(crate) glyph_picker_results: Vec<usize>,
+    pub(crate) glyph_picker_selected_index: usize,
+    pub(crate) glyph_picker_scroll: UniformListScrollHandle,
     pub(crate) command_palette_scroll: UniformListScrollHandle,
 }
 

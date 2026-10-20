@@ -7,10 +7,10 @@ use super::state::CachedRowPresentation;
 use crate::*;
 use gpui::{AnyElement, StatefulInteractiveElement, canvas, hsla, size, svg};
 
-/// Emoji tiles are laid out `EMOJI_GRID_COLUMNS` per row, each taking an
+/// Glyph-picker tiles are laid out `GLYPH_GRID_COLUMNS` per row, each taking an
 /// equal relative share of the row's width — sidesteps needing to measure
 /// the panel's actual pixel width to decide how many tiles fit.
-pub(crate) const EMOJI_GRID_COLUMNS: usize = 10;
+pub(crate) const GLYPH_GRID_COLUMNS: usize = 10;
 /// Wide enough for "OPEN 12s" (the longest secret pill) at 10px plus padding.
 const SECRET_PILL_WIDTH: f32 = 60.0;
 /// Wide enough for an "HH:MM" recency label at 11px.
@@ -48,6 +48,45 @@ fn emoji_tile_glyph(glyph: &str) -> AnyElement {
             .text_size(px(28.0))
             .child(glyph.to_owned())
             .into_any_element()
+    }
+}
+
+/// The visual for a single symbol tile. Symbols are plain text glyphs, so
+/// unlike emoji they render through normal font fallback on every platform.
+fn symbol_tile_glyph(glyph: &str, palette: Palette) -> AnyElement {
+    div()
+        .text_size(px(28.0))
+        .text_color(palette.title_text)
+        .child(glyph.to_owned())
+        .into_any_element()
+}
+
+/// Copy that differs between the emoji and symbol pickers.
+struct GlyphPickerCopy {
+    affordance_icon: &'static str,
+    affordance_label: &'static str,
+    placeholder: &'static str,
+    empty_results: &'static str,
+    /// Status-bar label when nothing is selected.
+    idle_status: &'static str,
+}
+
+fn glyph_picker_copy(picker: emoji::GlyphPicker) -> GlyphPickerCopy {
+    match picker {
+        emoji::GlyphPicker::Emoji => GlyphPickerCopy {
+            affordance_icon: "🙂",
+            affordance_label: "Emoji Search",
+            placeholder: "Search emoji",
+            empty_results: "No emoji found.",
+            idle_status: "Emoji picker",
+        },
+        emoji::GlyphPicker::Symbol => GlyphPickerCopy {
+            affordance_icon: "Ω",
+            affordance_label: "Symbol Search",
+            placeholder: "Search symbols",
+            empty_results: "No symbols found.",
+            idle_status: "Symbol picker",
+        },
     }
 }
 
@@ -247,9 +286,9 @@ impl Render for LauncherView {
                         .flex()
                         .items_center()
                         .gap_2()
-                        // Emoji mode's back button sits flush with the divider
+                        // A glyph picker's back button sits flush with the divider
                         // below instead of at the search field's usual inset.
-                        .pl(if self.emoji_search_active {
+                        .pl(if self.glyph_picker.is_some() {
                             px(0.0)
                         } else {
                             px(8.0)
@@ -319,11 +358,11 @@ impl Render for LauncherView {
                             }));
 
                         // Left/Right (plain or Shift-extended) normally move/extend
-                        // the text cursor, but in emoji search mode they move the
-                        // grid selection instead (see `handle_emoji_search_keystroke`)
+                        // the text cursor, but in a glyph picker they move the
+                        // grid selection instead (see `handle_glyph_picker_keystroke`)
                         // — binding both would fire the cursor move and the grid
                         // move on every press.
-                        if !self.emoji_search_active {
+                        if self.glyph_picker.is_none() {
                             query_container = query_container
                                 .on_action(cx.listener(Self::query_left))
                                 .on_action(cx.listener(Self::query_right))
@@ -336,10 +375,10 @@ impl Render for LauncherView {
                     // background fill, focused or not (section 4 of the design system).
                     let _ = query_focused;
 
-                    if self.emoji_search_active {
+                    if self.glyph_picker.is_some() {
                         query_container = query_container.child(
                             div()
-                                .id("emoji-mode-back")
+                                .id("glyph-picker-back")
                                 .flex_none()
                                 .flex()
                                 .items_center()
@@ -356,7 +395,7 @@ impl Render for LauncherView {
                                     move |style| style.bg(selected_bg)
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.cancel_emoji_search(cx);
+                                    this.cancel_glyph_picker(cx);
                                 }))
                                 .child(
                                     svg()
@@ -371,10 +410,9 @@ impl Render for LauncherView {
                         div().flex_1().min_w(px(0.0)).child(TextInputElement::new(
                             cx.entity(),
                             TextInputTarget::Query,
-                            if self.emoji_search_active {
-                                "Search emoji"
-                            } else {
-                                "Pasta"
+                            match self.glyph_picker {
+                                Some(picker) => glyph_picker_copy(picker).placeholder,
+                                None => "Pasta",
                             },
                             palette,
                             query_input_enabled,
@@ -383,15 +421,16 @@ impl Render for LauncherView {
                 });
         if !self.tag_search_suggestions.is_empty()
             && query_input_enabled
-            && !self.emoji_search_active
+            && self.glyph_picker.is_none()
         {
             content = content.child(self.render_tag_search_suggestions(palette, cx));
         }
 
-        if self.showing_emoji_affordance() {
+        if let Some(picker) = self.glyph_picker_affordance() {
+            let copy = glyph_picker_copy(picker);
             content = content.child(
                 div()
-                    .id("emoji-search-affordance")
+                    .id("glyph-picker-affordance")
                     .w_full()
                     .flex()
                     .items_center()
@@ -406,8 +445,8 @@ impl Render for LauncherView {
                         let row_hover = palette.row_hover_bg;
                         move |style| style.bg(row_hover)
                     })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.enter_emoji_search_mode(cx);
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.enter_glyph_picker(picker, cx);
                     }))
                     .child(
                         div()
@@ -417,7 +456,7 @@ impl Render for LauncherView {
                             .justify_center()
                             .text_size(px(14.0))
                             .text_color(palette.accent)
-                            .child("🙂"),
+                            .child(copy.affordance_icon),
                     )
                     .child(
                         div()
@@ -425,7 +464,7 @@ impl Render for LauncherView {
                             .min_w(px(0.0))
                             .text_size(px(14.0))
                             .text_color(palette.title_text)
-                            .child("Emoji Search"),
+                            .child(copy.affordance_label),
                     )
                     .child(
                         div()
@@ -1545,8 +1584,8 @@ impl Render for LauncherView {
             );
         }
 
-        let workspace = if self.emoji_search_active {
-            self.render_emoji_search_workspace(palette, window, cx)
+        let workspace = if self.glyph_picker.is_some() {
+            self.render_glyph_picker_workspace(palette, window, cx)
         } else if self.command_palette_active() {
             self.render_command_palette_workspace(palette, cx)
         } else {
@@ -1729,20 +1768,23 @@ impl LauncherView {
             .into_any_element()
     }
 
-    /// Replaces the normal results+preview workspace while emoji search mode
-    /// is active — a grid of glyph/name candidates from `emoji::search_emojis`.
-    /// The search input itself is the main query row above (see the "Emoji"
-    /// chip logic in `render`), not a separate field.
-    fn render_emoji_search_workspace(
+    /// Replaces the normal results+preview workspace while a glyph picker is
+    /// active — a grid of candidates from `emoji::GlyphPicker::search`. The
+    /// search input itself is the main query row above (see the picker's
+    /// back-button logic in `render`), not a separate field.
+    fn render_glyph_picker_workspace(
         &mut self,
         palette: Palette,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let result_count = self.emoji_search_results.len();
+        let result_count = self.glyph_picker_results.len();
+        let empty_label = self
+            .glyph_picker
+            .map_or("", |picker| glyph_picker_copy(picker).empty_results);
         let results = if result_count == 0 {
             div()
-                .id("emoji-results-list")
+                .id("glyph-picker-results")
                 .w_full()
                 .h_full()
                 .flex()
@@ -1750,25 +1792,25 @@ impl LauncherView {
                 .justify_center()
                 .text_color(palette.muted_text)
                 .text_sm()
-                .child("No emoji found.")
+                .child(empty_label)
                 .into_any_element()
         } else {
-            let selected_index = self.emoji_search_selected_index;
-            let row_count = result_count.div_ceil(EMOJI_GRID_COLUMNS);
+            let selected_index = self.glyph_picker_selected_index;
+            let row_count = result_count.div_ceil(GLYPH_GRID_COLUMNS);
             uniform_list(
-                "emoji-results-list",
+                "glyph-picker-results",
                 row_count,
                 cx.processor(move |this, range: Range<usize>, _window, cx| {
                     let mut rows = Vec::with_capacity(range.end.saturating_sub(range.start));
                     for row in range {
-                        rows.push(this.render_emoji_grid_row(row, selected_index, palette, cx));
+                        rows.push(this.render_glyph_grid_row(row, selected_index, palette, cx));
                     }
                     rows
                 }),
             )
             .w_full()
             .h_full()
-            .track_scroll(self.emoji_results_scroll.clone())
+            .track_scroll(self.glyph_picker_scroll.clone())
             .into_any_element()
         };
 
@@ -1792,32 +1834,32 @@ impl LauncherView {
             .into_any_element()
     }
 
-    /// One virtualized `uniform_list` row of the emoji grid — up to
-    /// `EMOJI_GRID_COLUMNS` tiles, each an equal relative share of the
+    /// One virtualized `uniform_list` row of the glyph grid — up to
+    /// `GLYPH_GRID_COLUMNS` tiles, each an equal relative share of the
     /// row's width so the tile count doesn't depend on measuring the
     /// panel's actual pixel width.
-    fn render_emoji_grid_row(
+    fn render_glyph_grid_row(
         &self,
         row: usize,
         selected_index: usize,
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let start = row * EMOJI_GRID_COLUMNS;
-        let end = (start + EMOJI_GRID_COLUMNS).min(self.emoji_search_results.len());
+        let start = row * GLYPH_GRID_COLUMNS;
+        let end = (start + GLYPH_GRID_COLUMNS).min(self.glyph_picker_results.len());
 
         let mut tiles = div()
-            .id(("emoji-row", row as u64))
+            .id(("glyph-picker-row", row as u64))
             .w_full()
             .h(px(84.0))
             .flex()
             .items_center()
             .gap_x(px(6.0));
         for position in start..end {
-            let Some(&entry_index) = self.emoji_search_results.get(position) else {
+            let Some(&entry_index) = self.glyph_picker_results.get(position) else {
                 continue;
             };
-            tiles = tiles.child(self.render_emoji_tile(
+            tiles = tiles.child(self.render_glyph_tile(
                 position,
                 entry_index,
                 selected_index,
@@ -1828,13 +1870,13 @@ impl LauncherView {
         // Pad a short trailing row with invisible spacers so the real tiles
         // keep the same `flex_1` share of the row width as a full row,
         // instead of stretching to fill the space the missing tiles left.
-        for _ in (end - start)..EMOJI_GRID_COLUMNS {
+        for _ in (end - start)..GLYPH_GRID_COLUMNS {
             tiles = tiles.child(div().flex_1().min_w(px(0.0)).h(px(72.0)));
         }
         tiles.into_any_element()
     }
 
-    fn render_emoji_tile(
+    fn render_glyph_tile(
         &self,
         position: usize,
         entry_index: usize,
@@ -1842,7 +1884,10 @@ impl LauncherView {
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some((glyph, _name)) = emoji::entry_at(entry_index) else {
+        let Some(picker) = self.glyph_picker else {
+            return div().into_any_element();
+        };
+        let Some((glyph, _name)) = picker.entry_at(entry_index) else {
             return div().into_any_element();
         };
         let is_selected = position == selected_index;
@@ -1853,7 +1898,7 @@ impl LauncherView {
         // are small explicit values rather than whatever's left over from
         // floating a small square in a full-width column.
         let mut tile = div()
-            .id(("emoji-tile", position as u64))
+            .id(("glyph-picker-tile", position as u64))
             .flex_1()
             .min_w(px(0.0))
             .h(px(72.0))
@@ -1868,8 +1913,8 @@ impl LauncherView {
             .border_color(hsla(0.0, 0.0, 0.0, 0.0))
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.emoji_search_selected_index = position;
-                this.copy_selected_emoji(Delivery::chosen(false), cx);
+                this.glyph_picker_selected_index = position;
+                this.copy_selected_glyph(Delivery::chosen(false), cx);
             }));
         if is_selected {
             tile = tile
@@ -1882,7 +1927,11 @@ impl LauncherView {
             });
         }
 
-        tile.child(emoji_tile_glyph(glyph)).into_any_element()
+        tile.child(match picker {
+            emoji::GlyphPicker::Emoji => emoji_tile_glyph(glyph),
+            emoji::GlyphPicker::Symbol => symbol_tile_glyph(glyph, palette),
+        })
+        .into_any_element()
     }
 
     /// The permanent bottom bar. It names the primary action for the current
@@ -1891,7 +1940,7 @@ impl LauncherView {
     fn render_action_bar(&self, palette: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let (primary_label, primary_key) = if self.command_palette_active() {
             ("Run", "↵")
-        } else if self.emoji_search_active {
+        } else if self.glyph_picker.is_some() {
             ("Copy", "↵")
         } else {
             match self.items.get(self.selected_index) {
@@ -1920,13 +1969,12 @@ impl LauncherView {
         let pin_label = if self.pinned { "Unpin" } else { "Pin" };
         let status_label: SharedString = if self.command_palette_active() {
             SharedString::from("Run a command")
-        } else if self.emoji_search_active {
-            self.emoji_search_results
-                .get(self.emoji_search_selected_index)
-                .copied()
-                .and_then(emoji::entry_at)
-                .map(|(_, name)| SharedString::from(name.to_owned()))
-                .unwrap_or_else(|| SharedString::from("Emoji picker"))
+        } else if let Some(picker) = self.glyph_picker {
+            self.glyph_picker_results
+                .get(self.glyph_picker_selected_index)
+                .and_then(|&index| picker.entry_at(index))
+                .map(|(_, name)| SharedString::from(name))
+                .unwrap_or_else(|| SharedString::from(glyph_picker_copy(picker).idle_status))
         } else if self.pinned {
             SharedString::from("Pinned — won't auto-hide")
         } else {

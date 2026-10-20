@@ -115,6 +115,13 @@ Current baseline:
 - Reopen the launcher and confirm it comes back to the normal results list, not the emoji grid.
 - Confirm the picked emoji did **not** create a clipboard history entry.
 
+### Symbol Picker
+
+- Type `s` to surface the symbol affordance and enter the picker.
+- Search `en dash`, `em dash` and `interpunct` and confirm `–`, `—` and `·` come first, with the name shown in the action bar.
+- Pick a symbol with `Enter` and confirm it is pasted into the focused field; `Ctrl+Enter` copies it only.
+- Confirm `Esc` and the back button return to the normal results list, and that the picked symbol did **not** create a clipboard history entry.
+
 ### Transforms
 
 - Open transforms with `Tab`.

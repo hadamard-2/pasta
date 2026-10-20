@@ -127,7 +127,7 @@ See [LICENSE](LICENSE) for the full text.
 
 The app icon is derived from Google's [Noto Emoji](https://github.com/googlefonts/noto-emoji) clipboard glyph (U+1F4CB), licensed under Apache License 2.0 / SIL Open Font License 1.1.
 
-Emoji search keywords are enriched with [Unicode CLDR](https://github.com/unicode-org/cldr) English annotations, licensed under the [Unicode License v3](https://www.unicode.org/license.txt).
+Emoji search keywords, and the whole symbol search corpus, come from [Unicode CLDR](https://github.com/unicode-org/cldr) English annotations, licensed under the [Unicode License v3](https://www.unicode.org/license.txt).
 
 <br>
 

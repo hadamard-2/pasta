@@ -9,19 +9,23 @@ use sha2::{Digest, Sha256};
 use crate::neural_embed::{self, NeuralEmbedder};
 use crate::storage::{cosine_similarity, semantic_tokenize};
 
-/// Unicode CLDR English annotations (SPDX Unicode-3.0), used only to enrich
-/// each emoji's keyword list beyond the crate's built-in shortcodes — e.g.
-/// covering mood synonyms like "cheerful" or "awesome" that shortcodes miss.
+/// Unicode CLDR English annotations (SPDX Unicode-3.0). For emoji they only
+/// enrich each entry's keyword list beyond the crate's built-in shortcodes —
+/// e.g. covering mood synonyms like "cheerful" or "awesome" that shortcodes
+/// miss. The same file also annotates a curated set of non-emoji characters
+/// (dashes, punctuation, arrows, math, currency), which is the whole corpus
+/// for symbol search.
 const CLDR_ANNOTATIONS_EN: &str = include_str!("../assets/emoji/cldr-annotations-en.xml");
 
 pub(crate) struct EmojiEntry {
-    pub(crate) glyph: &'static str,
+    pub(crate) glyph: String,
     pub(crate) name: String,
     keywords: Vec<String>,
     search_terms: Vec<String>,
 }
 
 static EMOJI_ENTRIES: LazyLock<Vec<EmojiEntry>> = LazyLock::new(build_emoji_entries);
+static SYMBOL_ENTRIES: LazyLock<Vec<EmojiEntry>> = LazyLock::new(build_symbol_entries);
 static CORPUS_EMBEDDINGS: Mutex<Option<Vec<Vec<f32>>>> = Mutex::new(None);
 
 fn build_emoji_entries() -> Vec<EmojiEntry> {
@@ -39,21 +43,58 @@ fn build_emoji_entries() -> Vec<EmojiEntry> {
                 }
             }
 
-            let mut search_terms = semantic_tokenize(&name);
-            for keyword in &keywords {
-                search_terms.extend(semantic_tokenize(keyword));
-            }
-            search_terms.sort();
-            search_terms.dedup();
-
-            EmojiEntry {
-                glyph: emoji.as_str(),
-                name,
-                keywords,
-                search_terms,
-            }
+            EmojiEntry::new(emoji.as_str().to_owned(), name, keywords)
         })
         .collect()
+}
+
+/// The non-emoji characters CLDR annotates, in file order (which groups them
+/// by kind — punctuation, then arrows, math, currency and so on).
+fn build_symbol_entries() -> Vec<EmojiEntry> {
+    parse_cldr_symbol_annotations(CLDR_ANNOTATIONS_EN)
+        .into_iter()
+        .filter(|(glyph, _, _)| is_text_symbol(glyph))
+        .map(|(glyph, name, keywords)| EmojiEntry::new(glyph, name, keywords))
+        .collect()
+}
+
+/// Whether a CLDR-annotated character belongs in symbol search. Printable
+/// ASCII is skipped since it's already on the keyboard. Emoji are skipped
+/// since emoji search covers them, with one exception: characters like `©`,
+/// `™` or `↔` that render as plain text unless followed by U+FE0F — the
+/// `emojis` crate lists them under that FE0F form, and the bare character is
+/// the one people want when writing. Anything in the pictograph planes is
+/// treated as emoji even when the bundled `emojis` crate predates it, along
+/// with skin-tone and hair components.
+fn is_text_symbol(glyph: &str) -> bool {
+    if glyph.is_ascii() {
+        return false;
+    }
+    if glyph
+        .chars()
+        .any(|c| matches!(c as u32, 0x1F000..=0x1FAFF | 0xFE0F | 0x200D))
+    {
+        return false;
+    }
+    emojis::get(glyph).is_none_or(|emoji| emoji.as_str() != glyph)
+}
+
+impl EmojiEntry {
+    fn new(glyph: String, name: String, keywords: Vec<String>) -> Self {
+        let mut search_terms = semantic_tokenize(&name);
+        for keyword in &keywords {
+            search_terms.extend(semantic_tokenize(keyword));
+        }
+        search_terms.sort();
+        search_terms.dedup();
+
+        Self {
+            glyph,
+            name,
+            keywords,
+            search_terms,
+        }
+    }
 }
 
 /// Parses `<annotation cp="X">a | b | c</annotation>` lines, skipping the
@@ -64,37 +105,77 @@ fn parse_cldr_annotations(xml: &str) -> HashMap<&str, Vec<String>> {
     let mut map = HashMap::new();
 
     for line in xml.lines() {
-        let line = line.trim();
-        if line.contains("type=\"tts\"") {
+        let Some(annotation) = parse_annotation_line(line) else {
+            continue;
+        };
+        if annotation.is_tts {
             continue;
         }
-        let Some(rest) = line.strip_prefix("<annotation cp=\"") else {
-            continue;
-        };
-        let Some(cp_end) = rest.find('"') else {
-            continue;
-        };
-        let cp = &rest[..cp_end];
-        let Some(tag_close) = rest.find('>') else {
-            continue;
-        };
-        let body_start = tag_close + 1;
-        let Some(body_len) = rest[body_start..].find("</annotation>") else {
-            continue;
-        };
-        let body = &rest[body_start..body_start + body_len];
-
-        let keywords: Vec<String> = body
-            .split('|')
-            .map(|keyword| unescape_xml_entities(keyword.trim()))
-            .filter(|keyword| !keyword.is_empty())
-            .collect();
+        let keywords = split_keywords(annotation.body);
         if !keywords.is_empty() {
-            map.insert(cp, keywords);
+            map.insert(annotation.cp, keywords);
         }
     }
 
     map
+}
+
+/// Pairs each annotated character with its `type="tts"` display name and
+/// keyword list, as `(glyph, name, keywords)` in file order. Unlike
+/// `parse_cldr_annotations` the code point is unescaped, since symbols
+/// include `&`, `<` and `>`. Characters missing either line are dropped.
+fn parse_cldr_symbol_annotations(xml: &str) -> Vec<(String, String, Vec<String>)> {
+    let mut names: HashMap<&str, String> = HashMap::new();
+    let mut keyword_lines: Vec<(&str, Vec<String>)> = Vec::new();
+
+    for line in xml.lines() {
+        let Some(annotation) = parse_annotation_line(line) else {
+            continue;
+        };
+        if annotation.is_tts {
+            names.insert(annotation.cp, unescape_xml_entities(annotation.body.trim()));
+        } else {
+            let keywords = split_keywords(annotation.body);
+            if !keywords.is_empty() {
+                keyword_lines.push((annotation.cp, keywords));
+            }
+        }
+    }
+
+    keyword_lines
+        .into_iter()
+        .filter_map(|(cp, keywords)| {
+            let name = names.remove(cp)?;
+            Some((unescape_xml_entities(cp), name, keywords))
+        })
+        .collect()
+}
+
+struct AnnotationLine<'a> {
+    cp: &'a str,
+    is_tts: bool,
+    body: &'a str,
+}
+
+fn parse_annotation_line(line: &str) -> Option<AnnotationLine<'_>> {
+    let line = line.trim();
+    let rest = line.strip_prefix("<annotation cp=\"")?;
+    let cp_end = rest.find('"')?;
+    let tag_close = rest.find('>')?;
+    let body_start = tag_close + 1;
+    let body_len = rest[body_start..].find("</annotation>")?;
+    Some(AnnotationLine {
+        cp: &rest[..cp_end],
+        is_tts: rest[..tag_close].contains("type=\"tts\""),
+        body: &rest[body_start..body_start + body_len],
+    })
+}
+
+fn split_keywords(body: &str) -> Vec<String> {
+    body.split('|')
+        .map(|keyword| unescape_xml_entities(keyword.trim()))
+        .filter(|keyword| !keyword.is_empty())
+        .collect()
 }
 
 fn unescape_xml_entities(value: &str) -> String {
@@ -104,18 +185,82 @@ fn unescape_xml_entities(value: &str) -> String {
         .replace("&gt;", ">")
 }
 
-/// True when the (trimmed, lowercased) query is a non-empty prefix of
-/// "emoji" — the trigger for surfacing the emoji-search affordance row.
-pub(crate) fn should_show_emoji_affordance(query: &str) -> bool {
-    let normalized = query.trim().to_ascii_lowercase();
-    !normalized.is_empty() && "emoji".starts_with(normalized.as_str())
+/// Which corpus the launcher's glyph-picker grid is showing. Both share the
+/// same grid, keyboard handling and copy-on-Enter behavior; only the corpus
+/// and its labels differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlyphPicker {
+    Emoji,
+    Symbol,
 }
 
-/// Glyph and display name for a `search_emojis` result index, for rendering.
-pub(crate) fn entry_at(index: usize) -> Option<(&'static str, &'static str)> {
-    EMOJI_ENTRIES
-        .get(index)
-        .map(|entry| (entry.glyph, entry.name.as_str()))
+impl GlyphPicker {
+    /// The picker whose affordance row the query is reaching for: a non-empty
+    /// prefix (trimmed, case-insensitive) of "emoji" or "symbol".
+    pub(crate) fn for_affordance_query(query: &str) -> Option<Self> {
+        let normalized = query.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            None
+        } else if "emoji".starts_with(normalized.as_str()) {
+            Some(Self::Emoji)
+        } else if "symbol".starts_with(normalized.as_str()) {
+            Some(Self::Symbol)
+        } else {
+            None
+        }
+    }
+
+    /// Glyph and display name for a `search` result index, for rendering.
+    pub(crate) fn entry_at(self, index: usize) -> Option<(&'static str, &'static str)> {
+        self.entries()
+            .get(index)
+            .map(|entry| (entry.glyph.as_str(), entry.name.as_str()))
+    }
+
+    pub(crate) fn search(
+        self,
+        query: &str,
+        embedder: Option<&NeuralEmbedder>,
+        limit: usize,
+    ) -> Vec<usize> {
+        match self {
+            Self::Emoji => search_emojis(query, embedder, limit),
+            Self::Symbol => search_symbols(query, limit),
+        }
+    }
+
+    fn entries(self) -> &'static [EmojiEntry] {
+        match self {
+            Self::Emoji => &EMOJI_ENTRIES,
+            Self::Symbol => &SYMBOL_ENTRIES,
+        }
+    }
+}
+
+/// Ranks the symbol corpus lexically. Unlike emoji there is no neural tier:
+/// symbol names are short and literal ("en dash", "not equal"), so the CLDR
+/// keywords already carry the synonyms that matter.
+fn search_symbols(query: &str, limit: usize) -> Vec<usize> {
+    let query = query.trim();
+    if query.is_empty() {
+        return (0..SYMBOL_ENTRIES.len().min(limit)).collect();
+    }
+
+    let query_lower = query.to_ascii_lowercase();
+    let query_terms = query_terms(query);
+    // Ties go to the lower code point, which favors the everyday Latin-1
+    // characters over look-alikes from other scripts (`·` over `・`).
+    rank(
+        lexical_only_scores(&SYMBOL_ENTRIES, &query_lower, &query_terms),
+        limit,
+        |index| {
+            SYMBOL_ENTRIES[index]
+                .glyph
+                .chars()
+                .next()
+                .map_or(0, u32::from)
+        },
+    )
 }
 
 /// Ranks the emoji corpus against `query`. Lexical matches (exact keyword,
@@ -123,20 +268,16 @@ pub(crate) fn entry_at(index: usize) -> Option<(&'static str, &'static str)> {
 /// hybrid model clipboard search uses in `storage::combined_search_score` —
 /// `embedder` is only used when pasta-brain is enabled, so this degrades to
 /// lexical-only search when it's off or not yet loaded.
-pub(crate) fn search_emojis(
-    query: &str,
-    embedder: Option<&NeuralEmbedder>,
-    limit: usize,
-) -> Vec<usize> {
+fn search_emojis(query: &str, embedder: Option<&NeuralEmbedder>, limit: usize) -> Vec<usize> {
     let query = query.trim();
     if query.is_empty() {
         return (0..EMOJI_ENTRIES.len().min(limit)).collect();
     }
 
     let query_lower = query.to_ascii_lowercase();
-    let query_terms = semantic_tokenize(query);
+    let query_terms = query_terms(query);
 
-    let mut scored: Vec<(f32, usize)> = embedder
+    let scored: Vec<(f32, usize)> = embedder
         .and_then(|embedder| {
             let query_embedding = embedder.embed(query, &query_terms);
             with_corpus_embeddings(|corpus_embeddings: &[Vec<f32>]| {
@@ -156,13 +297,31 @@ pub(crate) fn search_emojis(
                     .collect::<Vec<(f32, usize)>>()
             })
         })
-        .unwrap_or_else(|| lexical_only_scores(&query_lower, &query_terms));
+        .unwrap_or_else(|| lexical_only_scores(&EMOJI_ENTRIES, &query_lower, &query_terms));
 
+    rank(scored, limit, |index| index as u32)
+}
+
+/// `semantic_tokenize` emits a plain word twice (whole, then as its only
+/// split part), which would double-count every term in the lexical score.
+fn query_terms(query: &str) -> Vec<String> {
+    let mut terms = semantic_tokenize(query);
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+/// Highest score first; equal scores fall back to ascending `tie_break`.
+fn rank(
+    mut scored: Vec<(f32, usize)>,
+    limit: usize,
+    tie_break: impl Fn(usize) -> u32,
+) -> Vec<usize> {
     scored.sort_by(|left, right| {
         right
             .0
             .total_cmp(&left.0)
-            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| tie_break(left.1).cmp(&tie_break(right.1)))
     });
     scored
         .into_iter()
@@ -171,8 +330,12 @@ pub(crate) fn search_emojis(
         .collect()
 }
 
-fn lexical_only_scores(query_lower: &str, query_terms: &[String]) -> Vec<(f32, usize)> {
-    EMOJI_ENTRIES
+fn lexical_only_scores(
+    entries: &[EmojiEntry],
+    query_lower: &str,
+    query_terms: &[String],
+) -> Vec<(f32, usize)> {
+    entries
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
@@ -183,8 +346,13 @@ fn lexical_only_scores(query_lower: &str, query_terms: &[String]) -> Vec<(f32, u
 }
 
 fn lexical_emoji_score(entry: &EmojiEntry, query_lower: &str, query_terms: &[String]) -> f32 {
-    if entry.name == *query_lower || entry.keywords.iter().any(|keyword| keyword == query_lower) {
-        return 3.0;
+    // An exact name match, then an exact keyword match, outranks any partial
+    // one: the partial sum below tops out at one point per query term.
+    if entry.name == *query_lower {
+        return query_terms.len() as f32 + 2.0;
+    }
+    if entry.keywords.iter().any(|keyword| keyword == query_lower) {
+        return query_terms.len() as f32 + 1.0;
     }
 
     let mut score = 0.0;
@@ -339,4 +507,59 @@ fn save_corpus_embeddings_to_cache(embeddings: &[Vec<f32>]) {
         return;
     };
     let _ = fs::write(dir.join("meta.json"), meta_json);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn top_symbol(query: &str) -> Option<&'static str> {
+        GlyphPicker::Symbol
+            .search(query, None, 1)
+            .first()
+            .and_then(|&index| GlyphPicker::Symbol.entry_at(index))
+            .map(|(glyph, _)| glyph)
+    }
+
+    #[test]
+    fn symbol_search_finds_characters_by_name_and_keyword() {
+        assert_eq!(top_symbol("en dash"), Some("–"));
+        assert_eq!(top_symbol("em dash"), Some("—"));
+        assert_eq!(top_symbol("interpunct"), Some("·"));
+        assert_eq!(top_symbol("not equal"), Some("≠"));
+    }
+
+    #[test]
+    fn symbol_search_includes_text_style_emoji_characters() {
+        assert_eq!(top_symbol("copyright"), Some("©"));
+        assert_eq!(top_symbol("trade mark"), Some("™"));
+    }
+
+    #[test]
+    fn symbol_corpus_skips_keyboard_ascii_and_emoji() {
+        let glyphs: Vec<&str> = SYMBOL_ENTRIES.iter().map(|e| e.glyph.as_str()).collect();
+        assert!(glyphs.iter().all(|glyph| !glyph.is_ascii()));
+        for emoji in ["⭐", "🏻", "🦰", "🪌"] {
+            assert!(!glyphs.contains(&emoji), "{emoji} is emoji, not a symbol");
+        }
+        assert!(SYMBOL_ENTRIES.iter().all(|entry| !entry.name.is_empty()));
+    }
+
+    #[test]
+    fn affordance_query_picks_the_matching_picker() {
+        assert_eq!(
+            GlyphPicker::for_affordance_query("e"),
+            Some(GlyphPicker::Emoji)
+        );
+        assert_eq!(
+            GlyphPicker::for_affordance_query(" EMOJI "),
+            Some(GlyphPicker::Emoji)
+        );
+        assert_eq!(
+            GlyphPicker::for_affordance_query("sym"),
+            Some(GlyphPicker::Symbol)
+        );
+        assert_eq!(GlyphPicker::for_affordance_query("symbols"), None);
+        assert_eq!(GlyphPicker::for_affordance_query(""), None);
+    }
 }

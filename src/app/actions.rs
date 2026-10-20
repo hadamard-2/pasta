@@ -1,5 +1,5 @@
 use super::state::{CachedRowPresentation, SearchRequest, SearchResponse, TextInputState};
-use super::view::EMOJI_GRID_COLUMNS;
+use super::view::GLYPH_GRID_COLUMNS;
 use crate::storage::{
     SEMANTIC_MIN_QUERY_CHARS, SEMANTIC_SOURCE_TEXT_LIMIT, SearchExecution, bounded_text_prefix,
     encode_f32_vec_base64, semantic_embedding,
@@ -272,10 +272,10 @@ impl LauncherView {
             command_palette_selected: 0,
             caret_visible: true,
             caret_blink_due_at: Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS),
-            emoji_search_active: false,
-            emoji_search_results: Vec::new(),
-            emoji_search_selected_index: 0,
-            emoji_results_scroll: UniformListScrollHandle::new(),
+            glyph_picker: None,
+            glyph_picker_results: Vec::new(),
+            glyph_picker_selected_index: 0,
+            glyph_picker_scroll: UniformListScrollHandle::new(),
             command_palette_scroll: UniformListScrollHandle::new(),
         };
         view.begin_search_generation();
@@ -337,9 +337,9 @@ impl LauncherView {
         self.suppress_auto_hide_until = None;
         self.pinned = false;
         self.command_palette_selected = 0;
-        self.emoji_search_active = false;
-        self.emoji_search_results.clear();
-        self.emoji_search_selected_index = 0;
+        self.glyph_picker = None;
+        self.glyph_picker_results.clear();
+        self.glyph_picker_selected_index = 0;
         self.begin_search_generation();
         self.request_search(SearchExecution::Fast);
     }
@@ -378,9 +378,9 @@ impl LauncherView {
     /// While browsing (empty query), the results split into a fixed "PINNED"
     /// section and a scrolling "MOST RECENT" section. Returns the number of
     /// leading pinned items when that split is active, or 0 otherwise (a plain
-    /// single list — search results, emoji mode, or nothing pinned).
+    /// single list — search results, a glyph picker, or nothing pinned).
     pub(crate) fn browse_pinned_count(&self) -> usize {
-        if self.emoji_search_active || !self.query.is_empty() {
+        if self.glyph_picker.is_some() || !self.query.is_empty() {
             return 0;
         }
         self.items
@@ -433,8 +433,8 @@ impl LauncherView {
     }
 
     pub(crate) fn query_did_change(&mut self, cx: &mut Context<Self>) {
-        if self.emoji_search_active {
-            self.refresh_emoji_search_results();
+        if self.glyph_picker.is_some() {
+            self.refresh_glyph_picker_results();
             cx.notify();
             return;
         }
@@ -1051,32 +1051,39 @@ impl LauncherView {
         cx.notify();
     }
 
-    /// True when the query looks like the user is reaching for the emoji
-    /// search affordance (e.g. "e", "emo", "emoji") — checked only once no
-    /// other editor mode is active, since modes are mutually exclusive.
-    pub(crate) fn showing_emoji_affordance(&self) -> bool {
-        !self.emoji_search_active && emoji::should_show_emoji_affordance(&self.query)
+    /// The picker whose affordance row the query is reaching for (e.g. "e",
+    /// "emo", "emoji" for emoji; "s", "sym" for symbols) — checked only once
+    /// no other editor mode is active, since modes are mutually exclusive.
+    pub(crate) fn glyph_picker_affordance(&self) -> Option<emoji::GlyphPicker> {
+        if self.glyph_picker.is_some() {
+            return None;
+        }
+        emoji::GlyphPicker::for_affordance_query(&self.query)
     }
 
-    pub(crate) fn enter_emoji_search_mode(&mut self, cx: &mut Context<Self>) {
-        self.emoji_search_active = true;
+    pub(crate) fn enter_glyph_picker(
+        &mut self,
+        picker: emoji::GlyphPicker,
+        cx: &mut Context<Self>,
+    ) {
+        self.glyph_picker = Some(picker);
         self.query.clear();
         self.query_input_state.reset();
         self.tag_search_suggestions.clear();
-        self.refresh_emoji_search_results();
+        self.refresh_glyph_picker_results();
         self.queue_text_input_focus(TextInputTarget::Query);
         cx.notify();
     }
 
-    /// Clears the emoji chip and query text, then re-runs the normal search
+    /// Clears the picker and query text, then re-runs the normal search
     /// pipeline so the list view behind it reflects the now-empty query
-    /// instead of showing stale emoji-mode state.
-    pub(crate) fn cancel_emoji_search(&mut self, cx: &mut Context<Self>) {
-        self.emoji_search_active = false;
+    /// instead of showing stale picker state.
+    pub(crate) fn cancel_glyph_picker(&mut self, cx: &mut Context<Self>) {
+        self.glyph_picker = None;
         self.query.clear();
         self.query_input_state.reset();
-        self.emoji_search_results.clear();
-        self.emoji_search_selected_index = 0;
+        self.glyph_picker_results.clear();
+        self.glyph_picker_selected_index = 0;
         self.queue_text_input_focus(TextInputTarget::Query);
         self.query_did_change(cx);
     }
@@ -1197,8 +1204,8 @@ impl LauncherView {
     /// Enter command mode by seeding the query with `>` (used by the action-bar
     /// "Commands" button; typing `>` gets there directly).
     pub(crate) fn open_command_palette(&mut self, cx: &mut Context<Self>) {
-        if self.emoji_search_active {
-            self.cancel_emoji_search(cx);
+        if self.glyph_picker.is_some() {
+            self.cancel_glyph_picker(cx);
         }
         self.set_text_input_content(TextInputTarget::Query, ">".to_owned());
         let cursor = self.query.len();
@@ -1269,76 +1276,82 @@ impl LauncherView {
         }
     }
 
-    pub(crate) fn refresh_emoji_search_results(&mut self) {
+    pub(crate) fn refresh_glyph_picker_results(&mut self) {
+        let Some(picker) = self.glyph_picker else {
+            return;
+        };
         let embedder = if self.pasta_brain_enabled {
             self.storage.get_neural_embedder()
         } else {
             None
         };
-        self.emoji_search_results = emoji::search_emojis(&self.query, embedder.as_deref(), 40);
-        self.emoji_search_selected_index = 0;
-        self.emoji_results_scroll
+        self.glyph_picker_results = picker.search(&self.query, embedder.as_deref(), 40);
+        self.glyph_picker_selected_index = 0;
+        self.glyph_picker_scroll
             .scroll_to_item(0, ScrollStrategy::Center);
     }
 
     /// Moves the grid selection by `delta` flat positions — pass `±1` for
-    /// Left/Right and `±EMOJI_GRID_COLUMNS` for Up/Down (the grid has no
-    /// row/column state of its own; `emoji_search_selected_index` is always
-    /// a flat index into `emoji_search_results`).
-    pub(crate) fn move_emoji_search_selection(&mut self, delta: i32, cx: &mut Context<Self>) {
-        if self.emoji_search_results.is_empty() {
-            self.emoji_search_selected_index = 0;
+    /// Left/Right and `±GLYPH_GRID_COLUMNS` for Up/Down (the grid has no
+    /// row/column state of its own; `glyph_picker_selected_index` is always
+    /// a flat index into `glyph_picker_results`).
+    pub(crate) fn move_glyph_picker_selection(&mut self, delta: i32, cx: &mut Context<Self>) {
+        if self.glyph_picker_results.is_empty() {
+            self.glyph_picker_selected_index = 0;
             return;
         }
 
-        let previous_index = self.emoji_search_selected_index;
-        let max_index = self.emoji_search_results.len() - 1;
-        self.emoji_search_selected_index =
+        let previous_index = self.glyph_picker_selected_index;
+        let max_index = self.glyph_picker_results.len() - 1;
+        self.glyph_picker_selected_index =
             (previous_index as i32 + delta).clamp(0, max_index as i32) as usize;
 
-        if self.emoji_search_selected_index != previous_index {
-            let row = self.emoji_search_selected_index / EMOJI_GRID_COLUMNS;
-            self.emoji_results_scroll
+        if self.glyph_picker_selected_index != previous_index {
+            let row = self.glyph_picker_selected_index / GLYPH_GRID_COLUMNS;
+            self.glyph_picker_scroll
                 .scroll_to_item(row, ScrollStrategy::Center);
             cx.notify();
         }
     }
 
-    /// Copies the selected emoji and dismisses the launcher, so picking an emoji
+    /// Copies the selected glyph and dismisses the launcher, so picking one
     /// ends the same way copying a clip does rather than leaving the window up.
     /// Uses `mark_self_clipboard_write` so this doesn't create a clipboard-history
     /// entry — it's a picker action, not a captured clipboard event.
-    pub(crate) fn copy_selected_emoji(&mut self, delivery: Delivery, cx: &mut Context<Self>) {
+    pub(crate) fn copy_selected_glyph(&mut self, delivery: Delivery, cx: &mut Context<Self>) {
         let Some(entry_index) = self
-            .emoji_search_results
-            .get(self.emoji_search_selected_index)
+            .glyph_picker_results
+            .get(self.glyph_picker_selected_index)
             .copied()
         else {
             return;
         };
-        let Some((glyph, _name)) = emoji::entry_at(entry_index) else {
+        let Some((glyph, _name)) = self
+            .glyph_picker
+            .and_then(|picker| picker.entry_at(entry_index))
+        else {
             return;
         };
 
         self.pending_paste = self.write_text_for_delivery(glyph, delivery, cx);
-        // `reset_for_show` clears emoji-search state, so the next open starts on
+        // `reset_for_show` clears glyph-picker state, so the next open starts on
         // the normal results list rather than back in the grid.
         self.begin_close_transition(LauncherExitIntent::Hide);
         cx.notify();
     }
 
-    pub(crate) fn handle_emoji_search_keystroke(
+    pub(crate) fn handle_glyph_picker_keystroke(
         &mut self,
         event: &KeystrokeEvent,
         cx: &mut Context<Self>,
     ) {
         match event.keystroke.key.as_str() {
-            "escape" | "esc" => self.cancel_emoji_search(cx),
-            "up" | "arrowup" => self.move_emoji_search_selection(-(EMOJI_GRID_COLUMNS as i32), cx),
-            "down" | "arrowdown" => self.move_emoji_search_selection(EMOJI_GRID_COLUMNS as i32, cx),
-            "left" | "arrowleft" => self.move_emoji_search_selection(-1, cx),
-            "right" | "arrowright" => self.move_emoji_search_selection(1, cx),
-            "enter" | "return" => self.copy_selected_emoji(
+            "escape" | "esc" => self.cancel_glyph_picker(cx),
+            "up" | "arrowup" => self.move_glyph_picker_selection(-(GLYPH_GRID_COLUMNS as i32), cx),
+            "down" | "arrowdown" => self.move_glyph_picker_selection(GLYPH_GRID_COLUMNS as i32, cx),
+            "left" | "arrowleft" => self.move_glyph_picker_selection(-1, cx),
+            "right" | "arrowright" => self.move_glyph_picker_selection(1, cx),
+            "enter" | "return" => self.copy_selected_glyph(
                 Delivery::chosen(action_modifier_held(&event.keystroke.modifiers)),
                 cx,
             ),
@@ -3022,8 +3035,8 @@ impl LauncherView {
             return;
         }
 
-        if self.emoji_search_active {
-            self.handle_emoji_search_keystroke(event, cx);
+        if self.glyph_picker.is_some() {
+            self.handle_glyph_picker_keystroke(event, cx);
             return;
         }
 
@@ -3088,8 +3101,8 @@ impl LauncherView {
                 return;
             }
             "enter" | "return" => {
-                if self.showing_emoji_affordance() {
-                    self.enter_emoji_search_mode(cx);
+                if let Some(picker) = self.glyph_picker_affordance() {
+                    self.enter_glyph_picker(picker, cx);
                     return;
                 }
                 if matches!(
