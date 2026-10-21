@@ -60,6 +60,7 @@ fn symbol_tile_glyph(glyph: &str, palette: Palette) -> AnyElement {
 
 /// Copy that differs between the emoji and symbol pickers.
 struct GlyphPickerCopy {
+    /// Bundled Lucide icon (see `assets.rs`) shown on the affordance row.
     affordance_icon: &'static str,
     affordance_label: &'static str,
     placeholder: &'static str,
@@ -71,14 +72,14 @@ struct GlyphPickerCopy {
 fn glyph_picker_copy(picker: emoji::GlyphPicker) -> GlyphPickerCopy {
     match picker {
         emoji::GlyphPicker::Emoji => GlyphPickerCopy {
-            affordance_icon: "🙂",
+            affordance_icon: "icons/smile.svg",
             affordance_label: "Emoji Search",
             placeholder: "Search emoji",
             empty_results: "No emoji found.",
             idle_status: "Emoji picker",
         },
         emoji::GlyphPicker::Symbol => GlyphPickerCopy {
-            affordance_icon: "Ω",
+            affordance_icon: "icons/omega.svg",
             affordance_label: "Symbol Search",
             placeholder: "Search symbols",
             empty_results: "No symbols found.",
@@ -456,14 +457,12 @@ impl Render for LauncherView {
                         this.enter_glyph_picker(picker, cx);
                     }))
                     .child(
-                        div()
-                            .flex_none()
-                            .w(px(15.0))
-                            .flex()
-                            .justify_center()
-                            .text_size(px(14.0))
-                            .text_color(palette.accent)
-                            .child(copy.affordance_icon),
+                        div().flex_none().w(px(15.0)).flex().justify_center().child(
+                            svg()
+                                .path(copy.affordance_icon)
+                                .size(px(14.0))
+                                .text_color(palette.accent),
+                        ),
                     )
                     .child(
                         div()

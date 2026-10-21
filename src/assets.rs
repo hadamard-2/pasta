@@ -41,6 +41,12 @@ impl AssetSource for Assets {
             "icons/pin.svg" => Ok(Some(Cow::Borrowed(
                 include_bytes!("../assets/icons/pin.svg").as_slice(),
             ))),
+            "icons/smile.svg" => Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/icons/smile.svg").as_slice(),
+            ))),
+            "icons/omega.svg" => Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/icons/omega.svg").as_slice(),
+            ))),
             _ => Ok(None),
         }
     }
