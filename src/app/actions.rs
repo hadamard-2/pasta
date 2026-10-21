@@ -215,6 +215,7 @@ impl LauncherView {
             parameter_fill_input_state: TextInputState::new(cx),
             pending_text_input_focus: None,
             results_scroll: UniformListScrollHandle::new(),
+            results_scrollbar_drag: Default::default(),
             search_request_tx,
             search_generation: 0,
             search_generation_token,
@@ -276,6 +277,7 @@ impl LauncherView {
             glyph_picker_results: Vec::new(),
             glyph_picker_selected_index: 0,
             glyph_picker_scroll: UniformListScrollHandle::new(),
+            glyph_picker_scrollbar_drag: Default::default(),
             command_palette_scroll: UniformListScrollHandle::new(),
         };
         view.begin_search_generation();

@@ -3,6 +3,7 @@ use super::actions::{
     parameter_clickable_candidates,
 };
 use super::query_input::TextInputElement;
+use super::scrollbar;
 use super::state::CachedRowPresentation;
 use crate::*;
 use gpui::{AnyElement, StatefulInteractiveElement, canvas, hsla, size, svg};
@@ -194,18 +195,23 @@ impl Render for LauncherView {
                         rows
                     }),
                 )
-                .w_full()
-                .flex_1()
-                .min_h(px(0.0))
+                .size_full()
                 .track_scroll(self.results_scroll.clone());
-                column = column
-                    .child(section_label("MOST RECENT", palette))
-                    .child(recents);
+                column = column.child(section_label("MOST RECENT", palette)).child(
+                    div().w_full().flex_1().min_h(px(0.0)).child(
+                        scrollbar::with_vertical_scrollbar(
+                            recents,
+                            self.results_scroll.clone(),
+                            self.results_scrollbar_drag.clone(),
+                            palette,
+                        ),
+                    ),
+                );
             }
 
             column.into_any_element()
         } else {
-            uniform_list(
+            let list = uniform_list(
                 "results-list",
                 self.items.len(),
                 cx.processor(move |this, range: Range<usize>, _window, cx| {
@@ -232,9 +238,14 @@ impl Render for LauncherView {
                     rows
                 }),
             )
-            .w_full()
-            .h_full()
-            .track_scroll(self.results_scroll.clone())
+            .size_full()
+            .track_scroll(self.results_scroll.clone());
+            scrollbar::with_vertical_scrollbar(
+                list,
+                self.results_scroll.clone(),
+                self.results_scrollbar_drag.clone(),
+                palette,
+            )
             .into_any_element()
         };
 
@@ -1793,7 +1804,7 @@ impl LauncherView {
         } else {
             let selected_index = self.glyph_picker_selected_index;
             let row_count = result_count.div_ceil(GLYPH_GRID_COLUMNS);
-            uniform_list(
+            let list = uniform_list(
                 "glyph-picker-results",
                 row_count,
                 cx.processor(move |this, range: Range<usize>, _window, cx| {
@@ -1804,9 +1815,14 @@ impl LauncherView {
                     rows
                 }),
             )
-            .w_full()
-            .h_full()
-            .track_scroll(self.glyph_picker_scroll.clone())
+            .size_full()
+            .track_scroll(self.glyph_picker_scroll.clone());
+            scrollbar::with_vertical_scrollbar(
+                list,
+                self.glyph_picker_scroll.clone(),
+                self.glyph_picker_scrollbar_drag.clone(),
+                palette,
+            )
             .into_any_element()
         };
 

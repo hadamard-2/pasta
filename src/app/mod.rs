@@ -1,6 +1,7 @@
 mod actions;
 mod query_input;
 mod runtime;
+mod scrollbar;
 pub(crate) mod state;
 mod view;
 

@@ -230,6 +230,7 @@ pub(crate) struct LauncherView {
     pub(crate) parameter_fill_input_state: TextInputState,
     pub(crate) pending_text_input_focus: Option<TextInputTarget>,
     pub(crate) results_scroll: UniformListScrollHandle,
+    pub(crate) results_scrollbar_drag: super::scrollbar::ScrollbarDrag,
     pub(crate) search_request_tx: mpsc::Sender<SearchRequest>,
     pub(crate) search_generation: u64,
     pub(crate) search_generation_token: Arc<AtomicU64>,
@@ -300,6 +301,7 @@ pub(crate) struct LauncherView {
     pub(crate) glyph_picker_results: Vec<usize>,
     pub(crate) glyph_picker_selected_index: usize,
     pub(crate) glyph_picker_scroll: UniformListScrollHandle,
+    pub(crate) glyph_picker_scrollbar_drag: super::scrollbar::ScrollbarDrag,
     pub(crate) command_palette_scroll: UniformListScrollHandle,
 }
 
