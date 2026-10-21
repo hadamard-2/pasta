@@ -58,11 +58,11 @@ pub(crate) const SHOW_LAUNCHER_SHORTCUT_ID: &str = "pasta-show-launcher";
 const SHOW_LAUNCHER_DESCRIPTION: &str = "Show the Pasta clipboard launcher";
 
 /// Requested key combination, in the syntax of the freedesktop shortcuts
-/// specification: `LOGO` is the Super/Meta key and key names are xkbcommon
+/// specification: `ALT` is the Alt key, `LOGO` the Super/Meta key and key names are xkbcommon
 /// keysym names minus the `XKB_KEY_` prefix. Only a *preference* — the
 /// compositor may hand us something else (or let the user rebind it later),
 /// which is why the granted trigger is read back from the response.
-const PREFERRED_TRIGGER: &str = "LOGO+v";
+const PREFERRED_TRIGGER: &str = "ALT+space";
 
 /// `org.freedesktop.portal.Request::Response` codes.
 const RESPONSE_SUCCESS: u32 = 0;
@@ -537,13 +537,13 @@ mod tests {
 
     #[test]
     fn preferred_trigger_uses_shortcuts_spec_syntax() {
-        // Modifiers are the XKB_MOD_NAME_* names (LOGO, not SUPER/META) and the
+        // Modifiers are the XKB_MOD_NAME_* names (ALT, LOGO — not SUPER/META) and the
         // key is an xkbcommon keysym name minus the XKB_KEY_ prefix.
         let (modifiers, key) = PREFERRED_TRIGGER
             .rsplit_once('+')
             .expect("trigger has a modifier");
-        assert_eq!(modifiers, "LOGO");
-        assert_eq!(key, "v");
+        assert_eq!(modifiers, "ALT");
+        assert_eq!(key, "space");
     }
 
     #[test]

@@ -35,7 +35,7 @@ Paste smarter — search, transform, parametrize, and organize everything you co
 - **Secrets** — AES-256-GCM encrypted, stored in the macOS Keychain, masked in the UI until revealed.
 - **Emoji & symbol pickers** — type `e` or `s` to search emoji, or typographic symbols you can't type (en dash, interpunct, `≠`, `→`). On Linux, *Preferences → Emoji Font* points the emoji picker at any bitmap emoji font file you already have (`sbix` or `CBDT`); Pasta reads the images from your file and bundles none of that artwork.
 - **Syntax highlighting** out of the box for Bash, JSON, YAML, TOML, Python, Rust, Go, SQL, and [many more](https://github.com/sublimehq/Packages).
-- **Native** — glassmorphic UI, dark/light auto, GPU-accelerated rendering. No Electron, no web views. Global hotkey: `Option + Space` on macOS, `Meta + V` on Linux.
+- **Native** — glassmorphic UI, dark/light auto, GPU-accelerated rendering. No Electron, no web views. Global hotkey: `Option + Space` on macOS, `Alt + Space` on Linux.
 
 <p align="center">
   <img src="docs/screenshots/syntax-highlighting.png" width="720" alt="Syntax highlighting and parametrization" />
@@ -92,12 +92,12 @@ cd pasta
 
 The install script builds the release binary, drops a `.desktop` entry and icon into `~/.local/share`, and installs the polkit policy that gates secret reveal and clear-history behind the system authentication dialog. Plain `cargo build --release` also works if you prefer to launch from the CLI.
 
-Global hotkey is `Meta + V`. Tray icon requires a StatusNotifierItem host (built-in on KDE, `gnome-shell-extension-appindicator` on GNOME).
+Global hotkey is `Alt + Space`. Tray icon requires a StatusNotifierItem host (built-in on KDE, `gnome-shell-extension-appindicator` on GNOME).
 
-**The hotkey asks your desktop for permission, once.** Pasta registers `Meta + V` through the `org.freedesktop.portal.GlobalShortcuts` desktop portal, so the compositor performs the key grab — no special permissions, and it works the same on Wayland and X11. GNOME, KDE, and Hyprland implement it. The first launch after installing shows a permission dialog; approve it and Pasta re-registers silently on every launch after that. This needs Pasta's `.desktop` entry to be installed (the install script and the `.deb`/`.rpm` all do it) — the portal identifies apps by it, and GNOME refuses the request without one. If your desktop already uses `Super + V` for something else, the desktop's own binding wins and Pasta's shortcut silently never fires. GNOME is affected out of the box — it binds `<Super>v` (and `<Super>m`) to toggling the notification list. To give the key to Pasta, keep `<Super>m` for the notification list and restart Pasta (the key grab is taken when Pasta registers, so clearing the setting alone is not enough):
+**The hotkey asks your desktop for permission, once.** Pasta registers `Alt + Space` through the `org.freedesktop.portal.GlobalShortcuts` desktop portal, so the compositor performs the key grab — no special permissions, and it works the same on Wayland and X11. GNOME, KDE, and Hyprland implement it. The first launch after installing shows a permission dialog; approve it and Pasta re-registers silently on every launch after that. `Alt + Space` is only Pasta's suggestion: the desktop saves whichever shortcut you approve and hands that back on every launch, so to change it later, use your desktop's settings (on GNOME, Settings → Apps → Pasta) — changing Pasta's default does not move a shortcut you already approved. This needs Pasta's `.desktop` entry to be installed (the install script and the `.deb`/`.rpm` all do it) — the portal identifies apps by it, and GNOME refuses the request without one. If your desktop already uses `Alt + Space` for something else, the desktop's own binding wins and Pasta's shortcut silently never fires. GNOME is affected out of the box — it binds `<Alt>space` to opening the window menu. To give the key to Pasta, unbind the window menu and restart Pasta (the key grab is taken when Pasta registers, so clearing the setting alone is not enough):
 
 ```bash
-gsettings set org.gnome.shell.keybindings toggle-message-tray "['<Super>m']"
+gsettings set org.gnome.desktop.wm.keybindings activate-window-menu "[]"
 ```
 
 Pasta will not change this for you — it is a desktop-wide setting that affects every app.

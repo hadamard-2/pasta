@@ -509,7 +509,7 @@ pub(crate) fn spawn_hotkey_listener(_cx: &mut App) {
 }
 
 /// Fallback hotkey listener: watch every readable keyboard in `/dev/input` for
-/// Meta+Space. Runs on the calling thread until it loses device access.
+/// Alt+Space. Runs on the calling thread until it loses device access.
 #[cfg(target_os = "linux")]
 fn run_evdev_hotkey_listener(menu_tx: &mpsc::Sender<MenuCommand>) {
     use evdev::{Device, InputEventKind, Key};
@@ -565,7 +565,7 @@ fn run_evdev_hotkey_listener(menu_tx: &mpsc::Sender<MenuCommand>) {
     let mut keyboards = open_keyboards();
     if keyboards.is_empty() {
         eprintln!(
-            "warning: global Meta+Space hotkey unavailable: no readable keyboards in /dev/input (check input-group membership or device permissions)"
+            "warning: global Alt+Space hotkey unavailable: no readable keyboards in /dev/input (check input-group membership or device permissions)"
         );
         return;
     }
@@ -574,7 +574,7 @@ fn run_evdev_hotkey_listener(menu_tx: &mpsc::Sender<MenuCommand>) {
         return;
     }
 
-    let mut meta_pressed = false;
+    let mut alt_pressed = false;
 
     loop {
         let mut had_input_error = false;
@@ -587,16 +587,16 @@ fn run_evdev_hotkey_listener(menu_tx: &mpsc::Sender<MenuCommand>) {
                             let is_press = event.value() == 1;
                             let is_release = event.value() == 0;
 
-                            if key == Key::KEY_LEFTMETA || key == Key::KEY_RIGHTMETA {
+                            if key == Key::KEY_LEFTALT || key == Key::KEY_RIGHTALT {
                                 if is_press {
-                                    meta_pressed = true;
+                                    alt_pressed = true;
                                 } else if is_release {
-                                    meta_pressed = false;
+                                    alt_pressed = false;
                                 }
                                 continue;
                             }
 
-                            if key == Key::KEY_V && is_press && meta_pressed {
+                            if key == Key::KEY_SPACE && is_press && alt_pressed {
                                 let _ = menu_tx.send(MenuCommand::ShowLauncher);
                             }
                         }
@@ -623,7 +623,7 @@ fn run_evdev_hotkey_listener(menu_tx: &mpsc::Sender<MenuCommand>) {
                 eprintln!("warning: failed to recover Linux hotkey listener: {err}");
                 return;
             }
-            meta_pressed = false;
+            alt_pressed = false;
         }
 
         std::thread::sleep(Duration::from_millis(12));
