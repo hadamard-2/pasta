@@ -222,6 +222,9 @@ impl GlyphPicker {
             .map(|entry| (entry.glyph.as_str(), entry.name.as_str()))
     }
 
+    /// Result indices for `query`, best first. An empty query lists the whole
+    /// corpus in its natural grouped order so every glyph is reachable by
+    /// scrolling; `limit` only caps ranked results for a non-empty query.
     pub(crate) fn search(
         self,
         query: &str,
@@ -248,7 +251,7 @@ impl GlyphPicker {
 fn search_symbols(query: &str, limit: usize) -> Vec<usize> {
     let query = query.trim();
     if query.is_empty() {
-        return (0..SYMBOL_ENTRIES.len().min(limit)).collect();
+        return (0..SYMBOL_ENTRIES.len()).collect();
     }
 
     let query_lower = query.to_ascii_lowercase();
@@ -276,7 +279,7 @@ fn search_symbols(query: &str, limit: usize) -> Vec<usize> {
 fn search_emojis(query: &str, embedder: Option<&NeuralEmbedder>, limit: usize) -> Vec<usize> {
     let query = query.trim();
     if query.is_empty() {
-        return (0..EMOJI_ENTRIES.len().min(limit)).collect();
+        return (0..EMOJI_ENTRIES.len()).collect();
     }
 
     let query_lower = query.to_ascii_lowercase();
@@ -524,6 +527,15 @@ mod tests {
             .first()
             .and_then(|&index| GlyphPicker::Symbol.entry_at(index))
             .map(|(glyph, _)| glyph)
+    }
+
+    #[test]
+    fn empty_query_lists_the_whole_corpus_regardless_of_limit() {
+        for picker in [GlyphPicker::Emoji, GlyphPicker::Symbol] {
+            let results = picker.search("  ", None, 1);
+            assert_eq!(results.len(), picker.entries().len());
+            assert!(results.into_iter().eq(0..picker.entries().len()));
+        }
     }
 
     #[test]
