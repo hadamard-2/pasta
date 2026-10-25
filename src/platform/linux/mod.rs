@@ -785,15 +785,38 @@ pub(crate) fn read_clipboard_text() -> Option<String> {
     None
 }
 
-/// Image payload of the current clipboard, on paths where Pasta holds the
-/// bytes itself. Other paths read images through GPUI and return `None` here.
-pub(crate) fn read_clipboard_image() -> Option<(Vec<u8>, String)> {
-    if clipboard_path() != ClipboardPath::GnomeExtension {
-        return None;
-    }
-    gnome_bridge::STORE
-        .snapshot()
-        .and_then(|snapshot| snapshot.image())
+/// Image payload of the current clipboard, or `None` when the change should be
+/// handled as text. `read_through_gpui` reads the image through GPUI.
+pub(crate) fn read_clipboard_image(
+    read_through_gpui: impl FnOnce() -> Option<(Vec<u8>, String)>,
+) -> Option<(Vec<u8>, String)> {
+    clipboard_image_for_path(
+        clipboard_path(),
+        || {
+            gnome_bridge::STORE
+                .snapshot()
+                .and_then(|snapshot| snapshot.image())
+        },
+        read_through_gpui,
+    )
+}
+
+/// On the GNOME path the extension's snapshot is the whole clipboard, so GPUI
+/// is never consulted there: GPUI only hears about clipboard changes while a
+/// Pasta window has keyboard focus, and with the launcher hidden it keeps
+/// reading a stale offer that can turn a text copy into an empty image. An
+/// empty payload is never an image on any path, so it can't shadow the text.
+fn clipboard_image_for_path(
+    path: ClipboardPath,
+    read_snapshot_image: impl FnOnce() -> Option<(Vec<u8>, String)>,
+    read_through_gpui: impl FnOnce() -> Option<(Vec<u8>, String)>,
+) -> Option<(Vec<u8>, String)> {
+    let image = if path == ClipboardPath::GnomeExtension {
+        read_snapshot_image()
+    } else {
+        read_through_gpui()
+    };
+    image.filter(|(bytes, _)| !bytes.is_empty())
 }
 
 /// Work for the GNOME Shell bridge. Done in order on one thread, so a paste
@@ -2906,6 +2929,52 @@ mod tests {
             now + std::time::Duration::from_millis(1),
             "abc"
         ));
+    }
+
+    fn png(bytes: &[u8]) -> Option<(Vec<u8>, String)> {
+        Some((bytes.to_vec(), "image/png".to_owned()))
+    }
+
+    #[test]
+    fn gnome_text_copy_is_not_shadowed_by_gpui_clipboard() {
+        // With no window focused GPUI keeps a stale offer, and reading it can
+        // yield an image (even an empty one) for what is really a text copy.
+        let image = clipboard_image_for_path(
+            ClipboardPath::GnomeExtension,
+            || None,
+            || panic!("the GNOME path must not read the clipboard through GPUI"),
+        );
+        assert_eq!(image, None);
+    }
+
+    #[test]
+    fn gnome_path_takes_the_image_from_the_snapshot() {
+        let image = clipboard_image_for_path(
+            ClipboardPath::GnomeExtension,
+            || png(b"snapshot"),
+            || png(b"gpui"),
+        );
+        assert_eq!(image, png(b"snapshot"));
+    }
+
+    #[test]
+    fn other_paths_read_the_image_through_gpui() {
+        for path in [ClipboardPath::Wayland, ClipboardPath::X11] {
+            let image = clipboard_image_for_path(path, || None, || png(b"gpui"));
+            assert_eq!(image, png(b"gpui"));
+        }
+    }
+
+    #[test]
+    fn an_empty_image_read_is_not_an_image() {
+        for path in [
+            ClipboardPath::GnomeExtension,
+            ClipboardPath::Wayland,
+            ClipboardPath::X11,
+        ] {
+            let image = clipboard_image_for_path(path, || png(b""), || png(b""));
+            assert_eq!(image, None, "{path:?}");
+        }
     }
 
     #[test]

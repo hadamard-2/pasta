@@ -765,21 +765,19 @@ pub(crate) fn spawn_clipboard_watcher(cx: &mut App) {
 
                 // Paths that hold the clipboard bytes themselves hand the image
                 // over directly; the others read it through GPUI.
-                let clipboard_image = match read_clipboard_image() {
-                    Some(image) => Some(image),
-                    None => cx
-                        .update(|cx| {
-                            cx.read_from_clipboard().and_then(|item| {
-                                item.into_entries().find_map(|entry| match entry {
-                                    ClipboardEntry::Image(image) => Some(image),
-                                    _ => None,
-                                })
+                let clipboard_image = read_clipboard_image(|| {
+                    cx.update(|cx| {
+                        cx.read_from_clipboard().and_then(|item| {
+                            item.into_entries().find_map(|entry| match entry {
+                                ClipboardEntry::Image(image) => Some(image),
+                                _ => None,
                             })
                         })
-                        .ok()
-                        .flatten()
-                        .map(|image| (image.bytes.clone(), image.format.mime_type().to_owned())),
-                };
+                    })
+                    .ok()
+                    .flatten()
+                    .map(|image| (image.bytes.clone(), image.format.mime_type().to_owned()))
+                });
 
                 // A file manager copying an image puts only a file *reference*
                 // on the clipboard, so fall back to reading the referenced
