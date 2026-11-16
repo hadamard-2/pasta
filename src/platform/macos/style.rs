@@ -25,6 +25,7 @@ fn default_ui_style_state(
         surface_alpha: 1.00,
         secret_auto_clear: true,
         pasta_brain_enabled: false,
+        pinned_section_collapsed: false,
     }
 }
 
@@ -58,6 +59,7 @@ fn load_ui_style_state(
     style.surface_alpha = persisted.surface_alpha.clamp(0.45, 1.0);
     style.secret_auto_clear = persisted.secret_auto_clear;
     style.pasta_brain_enabled = persisted.pasta_brain_enabled;
+    style.pinned_section_collapsed = persisted.pinned_section_collapsed;
     style
 }
 
@@ -71,6 +73,7 @@ fn save_ui_style_state(style: &UiStyleState) {
         surface_alpha: style.surface_alpha.clamp(0.45, 1.0),
         secret_auto_clear: style.secret_auto_clear,
         pasta_brain_enabled: style.pasta_brain_enabled,
+        pinned_section_collapsed: style.pinned_section_collapsed,
     }) {
         Ok(serialized) => serialized,
         Err(err) => {

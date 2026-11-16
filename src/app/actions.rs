@@ -226,7 +226,7 @@ impl LauncherView {
             items: Vec::new(),
             row_presentations: Vec::new(),
             selected_index: 0,
-            pinned_section_collapsed: false,
+            pinned_section_collapsed: cx.global::<UiStyleState>().pinned_section_collapsed,
             selection_changed_at: Instant::now(),
             transition_alpha: 1.0,
             transition_from: 1.0,
@@ -298,7 +298,6 @@ impl LauncherView {
         self.parameter_fill_input_state.reset();
         self.pending_text_input_focus = Some(TextInputTarget::Query);
         self.selected_index = 0;
-        self.pinned_section_collapsed = false;
         self.selection_changed_at = Instant::now();
         self.items.clear();
         self.row_presentations.clear();
@@ -411,6 +410,8 @@ impl LauncherView {
 
     pub(crate) fn toggle_pinned_section(&mut self, cx: &mut Context<Self>) {
         self.pinned_section_collapsed = !self.pinned_section_collapsed;
+        cx.global_mut::<UiStyleState>().pinned_section_collapsed = self.pinned_section_collapsed;
+        persist_ui_style_state(cx);
         self.clamp_selection();
         self.mark_selection_changed(cx);
         cx.notify();

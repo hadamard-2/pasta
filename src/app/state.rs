@@ -241,9 +241,10 @@ pub(crate) struct LauncherView {
     pub(crate) items: Vec<ClipboardRecord>,
     pub(crate) row_presentations: Vec<CachedRowPresentation>,
     pub(crate) selected_index: usize,
-    /// Browse mode's "PINNED" section starts expanded on every show; clicking
-    /// the section header collapses it, which also pushes the selection down to
-    /// the first "MOST RECENT" item since the pinned rows are then hidden.
+    /// Whether browse mode's "PINNED" section is collapsed. Seeded from the
+    /// persisted `UiStyleState` and written back on every header click, so the
+    /// choice survives shows and restarts. Collapsing also pushes the selection
+    /// down to the first "MOST RECENT" item since the pinned rows are hidden.
     pub(crate) pinned_section_collapsed: bool,
     pub(crate) selection_changed_at: Instant,
     pub(crate) transition_alpha: f32,

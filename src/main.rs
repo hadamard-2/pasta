@@ -136,6 +136,9 @@ pub(crate) struct UiStyleState {
     pub surface_alpha: f32,
     pub secret_auto_clear: bool,
     pub pasta_brain_enabled: bool,
+    /// Whether browse mode's "PINNED" section is collapsed. Remembered across
+    /// shows and restarts so the header click is a lasting preference.
+    pub pinned_section_collapsed: bool,
     /// The user's chosen emoji font for the picker; `None` uses the bundled
     /// Noto images. Linux-only: macOS draws emoji natively.
     #[cfg(target_os = "linux")]
@@ -150,6 +153,8 @@ pub(crate) struct PersistedUiStyleState {
     pub(crate) secret_auto_clear: bool,
     #[serde(default = "default_pasta_brain_enabled")]
     pub(crate) pasta_brain_enabled: bool,
+    #[serde(default)]
+    pub(crate) pinned_section_collapsed: bool,
     #[cfg(target_os = "linux")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) emoji_font_path: Option<PathBuf>,
