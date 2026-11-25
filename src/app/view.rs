@@ -420,6 +420,7 @@ impl Render for LauncherView {
                             TextInputTarget::Query,
                             match self.glyph_picker {
                                 Some(picker) => glyph_picker_copy(picker).placeholder,
+                                None if self.command_palette_active() => "Filter commands",
                                 None => "Pasta",
                             },
                             palette,
@@ -430,6 +431,7 @@ impl Render for LauncherView {
         if !self.tag_search_suggestions.is_empty()
             && query_input_enabled
             && self.glyph_picker.is_none()
+            && !self.command_palette_active()
         {
             content = content.child(self.render_tag_search_suggestions(palette, cx));
         }
@@ -1635,7 +1637,7 @@ impl Render for LauncherView {
 }
 
 impl LauncherView {
-    /// The `>` command palette: a filtered list of commands on the left that run
+    /// The command palette (Ctrl+K / Cmd+K): a filtered list of commands on the left that run
     /// against the currently-selected clipboard item, whose preview stays on the
     /// right so it's clear what the command will act on.
     fn render_command_palette_workspace(
@@ -1971,7 +1973,11 @@ impl LauncherView {
                 _ => ("Copy", "↵"),
             }
         };
-        let commands_key = ">";
+        let commands_key = if cfg!(target_os = "macos") {
+            "⌘K"
+        } else {
+            "Ctrl+K"
+        };
         let pin_key = if cfg!(target_os = "macos") {
             "⌘⇧W"
         } else {

@@ -1,4 +1,6 @@
-use super::state::{CachedRowPresentation, SearchRequest, SearchResponse, TextInputState};
+use super::state::{
+    CachedRowPresentation, CommandPaletteOrigin, SearchRequest, SearchResponse, TextInputState,
+};
 use super::view::GLYPH_GRID_COLUMNS;
 use crate::storage::{
     SEMANTIC_MIN_QUERY_CHARS, SEMANTIC_SOURCE_TEXT_LIMIT, SearchExecution, bounded_text_prefix,
@@ -176,6 +178,16 @@ impl Delivery {
 
 /// The platform's app-shortcut modifier: Cmd (`platform`) on macOS, Ctrl on
 /// Linux — GPUI maps `platform` to Super/Meta there.
+/// Ctrl+K (Cmd+K on macOS): opens the command palette for the selected
+/// result, and closes it again while it's open.
+pub(crate) fn is_command_palette_shortcut(key: &str, modifiers: &gpui::Modifiers) -> bool {
+    key == "k"
+        && action_modifier_held(modifiers)
+        && !modifiers.shift
+        && !modifiers.alt
+        && !modifiers.function
+}
+
 pub(crate) fn action_modifier_held(modifiers: &gpui::Modifiers) -> bool {
     if cfg!(target_os = "macos") {
         modifiers.platform && !modifiers.control
@@ -270,6 +282,7 @@ impl LauncherView {
             suppress_auto_hide: false,
             suppress_auto_hide_until: None,
             pinned: false,
+            command_palette: None,
             command_palette_selected: 0,
             caret_visible: true,
             caret_blink_due_at: Instant::now() + Duration::from_millis(CARET_BLINK_INTERVAL_MS),
@@ -337,6 +350,7 @@ impl LauncherView {
         self.suppress_auto_hide = false;
         self.suppress_auto_hide_until = None;
         self.pinned = false;
+        self.command_palette = None;
         self.command_palette_selected = 0;
         self.glyph_picker = None;
         self.glyph_picker_results.clear();
@@ -381,7 +395,13 @@ impl LauncherView {
     /// leading pinned items when that split is active, or 0 otherwise (a plain
     /// single list — search results, a glyph picker, or nothing pinned).
     pub(crate) fn browse_pinned_count(&self) -> usize {
-        if self.glyph_picker.is_some() || !self.query.is_empty() {
+        // While the palette is open the query field holds its filter, so ask
+        // whether the search behind it was a browse.
+        let search_query = self
+            .command_palette
+            .as_ref()
+            .map_or(self.query.as_str(), |origin| origin.query.as_str());
+        if self.glyph_picker.is_some() || !search_query.is_empty() {
             return 0;
         }
         self.items
@@ -442,11 +462,9 @@ impl LauncherView {
             return;
         }
         if self.command_palette_active() {
-            // Command mode: leave the clipboard list and its selection frozen
-            // (that item is the command's target), invalidate any in-flight
-            // search, and just reset the palette's own row selection.
+            // The query field is holding the palette's filter text, so there
+            // is nothing to search: just restart the palette's row selection.
             self.command_palette_selected = 0;
-            self.begin_search_generation();
             cx.notify();
             return;
         }
@@ -458,6 +476,12 @@ impl LauncherView {
         if selection_changed {
             self.reset_results_scroll_to_top();
         }
+        self.run_search_for_query(cx);
+    }
+
+    /// Runs every search tier the current query calls for, leaving the
+    /// selection where it is.
+    fn run_search_for_query(&mut self, cx: &mut Context<Self>) {
         self.refresh_tag_search_suggestions_async(cx);
         self.schedule_query_refresh();
         self.schedule_delayed_query_refresh(
@@ -1058,7 +1082,7 @@ impl LauncherView {
     /// "emo", "emoji" for emoji; "s", "sym" for symbols) — checked only once
     /// no other editor mode is active, since modes are mutually exclusive.
     pub(crate) fn glyph_picker_affordance(&self) -> Option<emoji::GlyphPicker> {
-        if self.glyph_picker.is_some() {
+        if self.glyph_picker.is_some() || self.command_palette_active() {
             return None;
         }
         emoji::GlyphPicker::for_affordance_query(&self.query)
@@ -1091,19 +1115,15 @@ impl LauncherView {
         self.query_did_change(cx);
     }
 
-    /// The command palette is active whenever the query begins with `>`, the
-    /// convention for "run a command against the selected item".
+    /// Whether the command palette (Ctrl+K / Cmd+K) is open over the results.
     pub(crate) fn command_palette_active(&self) -> bool {
-        self.query.starts_with('>')
+        self.command_palette.is_some()
     }
 
-    /// The lowercased filter text after the leading `>`.
+    /// The lowercased palette filter. While the palette is open the query
+    /// field holds this filter; the search it replaced is in `command_palette`.
     fn command_palette_filter(&self) -> String {
-        self.query
-            .strip_prefix('>')
-            .unwrap_or_default()
-            .trim()
-            .to_lowercase()
+        self.query.trim().to_lowercase()
     }
 
     /// The commands offered for the currently-selected item, already filtered by
@@ -1204,40 +1224,65 @@ impl LauncherView {
         }
     }
 
-    /// Enter command mode by seeding the query with `>` (used by the action-bar
-    /// "Commands" button; typing `>` gets there directly).
+    /// Opens the command palette over the selected result (Ctrl+K / Cmd+K, or
+    /// the action bar's Commands button). The current search is set aside and
+    /// put back when the palette closes, so it works just as well mid-search.
     pub(crate) fn open_command_palette(&mut self, cx: &mut Context<Self>) {
-        if self.glyph_picker.is_some() {
-            self.cancel_glyph_picker(cx);
+        if self.command_palette_active() || self.items.get(self.selected_index).is_none() {
+            return;
         }
-        self.set_text_input_content(TextInputTarget::Query, ">".to_owned());
-        let cursor = self.query.len();
-        self.query_input_state.selected_range = cursor..cursor;
-        self.query_input_state.selection_reversed = false;
-        self.query_input_state.marked_range = None;
-        self.command_palette_selected = 0;
-        self.queue_text_input_focus(TextInputTarget::Query);
-        self.query_did_change(cx);
-    }
-
-    /// Leave command mode without running anything, restoring the normal browse
-    /// list for the (still-selected) item.
-    pub(crate) fn exit_command_palette(&mut self, cx: &mut Context<Self>) {
-        self.query.clear();
+        let results_settled =
+            self.latest_applied_search_execution >= self.preferred_refresh_execution();
+        self.command_palette = Some(CommandPaletteOrigin {
+            query: std::mem::take(&mut self.query),
+            selected_range: self.query_input_state.selected_range.clone(),
+            selection_reversed: self.query_input_state.selection_reversed,
+            selected_index: self.selected_index,
+            results_settled,
+        });
+        // Freeze the list behind the palette: the selected item is the
+        // command's target, so no late search result may reorder it.
+        self.begin_search_generation();
         self.query_input_state.reset();
         self.command_palette_selected = 0;
+        self.command_palette_scroll
+            .scroll_to_item(0, ScrollStrategy::Top);
         self.queue_text_input_focus(TextInputTarget::Query);
-        self.query_did_change(cx);
+        cx.notify();
+    }
+
+    /// Closes the palette and puts the search it was opened over back exactly
+    /// as it was: query, cursor and selected result.
+    fn restore_search_from_command_palette(&mut self, cx: &mut Context<Self>) {
+        let Some(origin) = self.command_palette.take() else {
+            return;
+        };
+        self.command_palette_selected = 0;
+        self.query = origin.query;
+        self.query_input_state.reset();
+        let len = self.query.len();
+        self.query_input_state.selected_range =
+            origin.selected_range.start.min(len)..origin.selected_range.end.min(len);
+        self.query_input_state.selection_reversed = origin.selection_reversed;
+        self.selected_index = origin.selected_index;
+        self.clamp_selection();
+        self.queue_text_input_focus(TextInputTarget::Query);
+        if !origin.results_settled {
+            self.run_search_for_query(cx);
+        }
+        cx.notify();
+    }
+
+    /// Leave the palette without running anything, back to the search it was
+    /// opened over.
+    pub(crate) fn exit_command_palette(&mut self, cx: &mut Context<Self>) {
+        self.restore_search_from_command_palette(cx);
     }
 
     pub(crate) fn execute_command(&mut self, action: CommandAction, cx: &mut Context<Self>) {
-        // Drop the `>` query first so that, once the command finishes (or opens
-        // its editor), the launcher is back in its normal state rather than
-        // still parsing command mode.
-        self.query.clear();
-        self.query_input_state.reset();
-        self.command_palette_selected = 0;
-        self.queue_text_input_focus(TextInputTarget::Query);
+        // Restore the search first so that, once the command finishes (or
+        // opens its editor), the launcher is back where the user left it.
+        self.restore_search_from_command_palette(cx);
 
         match action {
             CommandAction::Paste => self.deliver_selected(Delivery::Paste, cx),
@@ -1270,7 +1315,12 @@ impl LauncherView {
         event: &KeystrokeEvent,
         cx: &mut Context<Self>,
     ) {
-        match event.keystroke.key.as_str() {
+        let key = event.keystroke.key.as_str();
+        if is_command_palette_shortcut(key, &event.keystroke.modifiers) {
+            self.exit_command_palette(cx);
+            return;
+        }
+        match key {
             "escape" | "esc" => self.exit_command_palette(cx),
             "up" | "arrowup" => self.move_command_selection(-1, cx),
             "down" | "arrowdown" => self.move_command_selection(1, cx),
@@ -3000,9 +3050,6 @@ impl LauncherView {
 
         let action_mod = action_modifier_held(modifiers);
 
-        let command_navigation =
-            action_mod && !modifiers.shift && !modifiers.alt && !modifiers.function;
-
         if self.info_editor_target_id.is_some() {
             self.handle_info_editor_keystroke(event, cx);
             return;
@@ -3051,18 +3098,9 @@ impl LauncherView {
             return;
         }
 
-        if command_navigation {
-            match key {
-                "j" | ";" | "semicolon" => {
-                    self.move_selection(1, cx);
-                    return;
-                }
-                "k" | "l" => {
-                    self.move_selection(-1, cx);
-                    return;
-                }
-                _ => {}
-            }
+        if is_command_palette_shortcut(key, modifiers) {
+            self.open_command_palette(cx);
+            return;
         }
 
         if key == "escape" || key == "esc" {
@@ -4386,5 +4424,44 @@ city = "New York"
         };
         assert_eq!(action_modifier_held(&ctrl), cfg!(not(target_os = "macos")));
         assert_eq!(action_modifier_held(&cmd), cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn command_palette_shortcut_is_bare_action_modifier_plus_k() {
+        let action = if cfg!(target_os = "macos") {
+            gpui::Modifiers {
+                platform: true,
+                ..Default::default()
+            }
+        } else {
+            gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            }
+        };
+        assert!(is_command_palette_shortcut("k", &action));
+
+        // Other keys, a bare `k`, and extra modifiers are not the shortcut.
+        assert!(!is_command_palette_shortcut("j", &action));
+        assert!(!is_command_palette_shortcut(
+            "k",
+            &gpui::Modifiers::default()
+        ));
+        for extra in [
+            gpui::Modifiers {
+                shift: true,
+                ..action
+            },
+            gpui::Modifiers {
+                alt: true,
+                ..action
+            },
+            gpui::Modifiers {
+                function: true,
+                ..action
+            },
+        ] {
+            assert!(!is_command_palette_shortcut("k", &extra));
+        }
     }
 }

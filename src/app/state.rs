@@ -16,6 +16,21 @@ pub(crate) struct SearchResponse {
     pub(crate) row_presentations: Vec<CachedRowPresentation>,
 }
 
+/// The search the command palette was opened over. The palette borrows the
+/// query field for its own filter text, so this is what gets put back when it
+/// closes: the query, where the cursor was, and which result was selected.
+pub(crate) struct CommandPaletteOrigin {
+    pub(crate) query: String,
+    pub(crate) selected_range: Range<usize>,
+    pub(crate) selection_reversed: bool,
+    pub(crate) selected_index: usize,
+    /// Whether every search tier the query calls for had already landed when
+    /// the palette opened. Opening it discards in-flight results, so an
+    /// unsettled search is re-run on close; a settled one is left untouched so
+    /// the list doesn't reshuffle under the restored selection.
+    pub(crate) results_settled: bool,
+}
+
 pub(crate) struct TextInputState {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) selected_range: Range<usize>,
@@ -291,9 +306,12 @@ pub(crate) struct LauncherView {
     pub(crate) suppress_auto_hide: bool,
     pub(crate) suppress_auto_hide_until: Option<Instant>,
     pub(crate) pinned: bool,
-    /// Selected row within the `>`-triggered command palette (indexes the
-    /// filtered command list, separate from `selected_index` which stays on the
-    /// clipboard item the command will act upon).
+    /// Set while the command palette (Ctrl+K / Cmd+K) is open, holding the
+    /// search to restore when it closes.
+    pub(crate) command_palette: Option<CommandPaletteOrigin>,
+    /// Selected row within the command palette (indexes the filtered command
+    /// list, separate from `selected_index` which stays on the clipboard item
+    /// the command will act upon).
     pub(crate) command_palette_selected: usize,
     pub(crate) caret_visible: bool,
     pub(crate) caret_blink_due_at: Instant,

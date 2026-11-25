@@ -67,8 +67,17 @@ Current baseline:
 ### Navigation
 
 - Move selection with `Up` and `Down`.
-- Move selection with `Ctrl+J`, `Ctrl+K`, `Ctrl+L`, and `Ctrl+;`.
 - Confirm scrolling follows the selected row.
+
+### Command Palette
+
+- With an empty query, press `Ctrl+K` (`Cmd+K` on macOS) and confirm the command palette opens for the selected item.
+- Type a search, move the selection down a few rows, press `Ctrl+K`, and confirm the palette opens for that item and the query field is empty, showing "Filter commands".
+- Press `Esc` (or `Ctrl+K` again) and confirm the search text, cursor position and selected row are back exactly as they were.
+- From a search, run "Pin item" or "Delete item" from the palette and confirm it acts on the selected item and the search is still in place afterwards.
+- From a search, run "Rename item", finish the rename, and confirm the search is still in place.
+- Type `>` in the query and confirm it searches for `>` like any other character.
+- Click "Commands" in the action bar and confirm it opens the palette the same way.
 
 ### Clipboard Actions
 
