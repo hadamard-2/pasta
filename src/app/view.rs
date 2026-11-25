@@ -1948,7 +1948,7 @@ impl LauncherView {
     }
 
     /// The permanent bottom bar. It names the primary action for the current
-    /// selection and an always-available Commands entry, both with keycaps, so
+    /// selection and an always-available Actions entry, both with keycaps, so
     /// the app reads as keyboard-first before a key is pressed.
     fn render_action_bar(&self, palette: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let (primary_label, primary_key) = if self.command_palette_active() {
@@ -2073,7 +2073,7 @@ impl LauncherView {
                     .child(div().w(px(1.0)).h(px(16.0)).bg(palette.list_divider))
                     .child(
                         div()
-                            .id("action-bar-commands")
+                            .id("action-bar-actions")
                             .flex()
                             .items_center()
                             .gap(px(6.0))
@@ -2085,7 +2085,7 @@ impl LauncherView {
                                 div()
                                     .text_size(px(12.0))
                                     .text_color(palette.row_text)
-                                    .child("Commands"),
+                                    .child("Actions"),
                             )
                             .child(keycap(commands_key, palette)),
                     ),

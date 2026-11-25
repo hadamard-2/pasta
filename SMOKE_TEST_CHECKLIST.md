@@ -77,7 +77,7 @@ Current baseline:
 - From a search, run "Pin item" or "Delete item" from the palette and confirm it acts on the selected item and the search is still in place afterwards.
 - From a search, run "Rename item", finish the rename, and confirm the search is still in place.
 - Type `>` in the query and confirm it searches for `>` like any other character.
-- Click "Commands" in the action bar and confirm it opens the palette the same way.
+- Click "Actions" in the action bar and confirm it opens the palette the same way.
 
 ### Clipboard Actions
 

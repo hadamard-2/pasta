@@ -1225,7 +1225,7 @@ impl LauncherView {
     }
 
     /// Opens the command palette over the selected result (Ctrl+K / Cmd+K, or
-    /// the action bar's Commands button). The current search is set aside and
+    /// the action bar's Actions button). The current search is set aside and
     /// put back when the palette closes, so it works just as well mid-search.
     pub(crate) fn open_command_palette(&mut self, cx: &mut Context<Self>) {
         if self.command_palette_active() || self.items.get(self.selected_index).is_none() {
